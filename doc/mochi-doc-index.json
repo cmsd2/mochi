@@ -1,7 +1,7 @@
 {
   "version": 1,
   "package": "mochi",
-  "source": "doc/mochi.md",
+  "source": "./doc/mochi.md",
   "symbols": {
     "mod_cascade": {
       "type": "Function",

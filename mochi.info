@@ -1,4 +1,4 @@
-This is mochi.info, produced by makeinfo version 7.3 from mochi.texi.
+This is mochi.info, produced by makeinfo version 7.1 from mochi.texi.
 
 
 File: mochi.info,  Node: Top,  Next: Package mochi,  Up: (dir)
@@ -384,34 +384,60 @@ Appendix A Function and variable index
 * mod_unity_feedback:                    Function mod_unity_feedback SS K.
                                                                 (line 3)
 
+
 
 Tag Table:
 Node: Top71
 Node: Package mochi174
+Ref: #package-mochi307
 Node: Introduction to mochi428
+Ref: #introduction-to-mochi581
 Node: Definitions for mochi1055
+Ref: #definitions-for-mochi1224
 Node: Function mod_load path2087
+Ref: #function-mod_load-path2225
 Node: Function mod_print m3044
+Ref: #function-mod_print-m3224
 Node: Function mod_state_space m op_point3259
+Ref: #function-mod_state_space-m-op_point3484
 Node: Function mod_state_space m op_point override_params3485
+Ref: #function-mod_state_space-m-op_point-override_params3751
 Node: Function mod_state_space_symbolic m op_point4254
+Ref: #function-mod_state_space_symbolic-m-op_point4527
 Node: Function mod_simulate m op_point u_fn t_end [opts]4872
+Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5144
 Node: Function mod_step m op_point t_end [opts]5669
+Ref: #function-mod_step-m-op_point-t_end-opts5931
 Node: Function mod_impulse m op_point t_end [opts]5932
+Ref: #function-mod_impulse-m-op_point-t_end-opts6175
 Node: Function mod_cascade SS1 SS26709
+Ref: #function-mod_cascade-ss1-ss26922
 Node: Function mod_parallel SS1 SS26923
+Ref: #function-mod_parallel-ss1-ss27125
 Node: Function mod_unity_feedback SS K7126
+Ref: #function-mod_unity_feedback-ss-k7344
 Node: Function mod_transfer_function m op_point7985
+Ref: #function-mod_transfer_function-m-op_point8240
 Node: Function mod_transfer_function m op_point override_params8241
+Ref: #function-mod_transfer_function-m-op_point-override_params8503
 Node: Function mod_get m key8825
+Ref: #function-mod_get-m-key9049
 Node: Function mod_dataflow m op_point [opts]9119
+Ref: #function-mod_dataflow-m-op_point-opts9334
 Node: Function mod_to_dot m op_point10295
+Ref: #function-mod_to_dot-m-op_point10524
 Node: Function mod_to_dot m op_point override_params10525
+Ref: #function-mod_to_dot-m-op_point-override_params10766
 Node: Function mod_to_mermaid m op_point10767
+Ref: #function-mod_to_mermaid-m-op_point11015
 Node: Function mod_to_mermaid m op_point override_params11016
+Ref: #function-mod_to_mermaid-m-op_point-override_params11273
 Node: Function mod_diagram m op_point [opts]11466
+Ref: #function-mod_diagram-m-op_point-opts11668
 Node: Example12984
+Ref: #example13146
 Node: Note mod_load does not touch session state13745
+Ref: #note-mod_load-does-not-touch-session-state13957
 Node: Function and variable index14413
 
 End Tag Table
