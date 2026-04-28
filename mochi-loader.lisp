@@ -403,10 +403,44 @@ last one declared; reusable building-block classes come earlier."
         (when (>= search-from (length text)) (return (values best-name best-body)))
         (setf search-from (max search-from (1+ kw-pos)))))))
 
+(defun mochi--scan-extends (body)
+  "Return the list of class names that BODY's `extends' declarations
+inherit from.  Modelica syntax is `extends ParentName;' or
+`extends ParentName(modifications);'.  We don't care about the
+modifications here (rumoca has already applied them when emitting the
+flattened JSON) — we just need the parent class names so we can
+inherit their `input'/`output' declarations."
+  (let ((parents '())
+        (search-from 0)
+        (len (length body)))
+    (loop
+      (let ((pos (search "extends " body :start2 search-from)))
+        (unless pos (return (nreverse parents)))
+        ;; Make sure the previous character is whitespace / start-of-body
+        ;; (so we don't match an identifier that happens to end in
+        ;; `extends').
+        (cond
+          ((or (zerop pos)
+               (member (char body (1- pos))
+                       '(#\Space #\Tab #\Newline #\Return #\;)))
+           (let* ((name-start (+ pos 8))
+                  (name-end (or (loop for i from name-start below len
+                                      while (or (alphanumericp (char body i))
+                                                (char= (char body i) #\_)
+                                                (char= (char body i) #\.))
+                                      finally (return i))
+                                len)))
+             (when (> name-end name-start)
+               (push (subseq body name-start name-end) parents))
+             (setf search-from (max (1+ pos) name-end))))
+          (t (setf search-from (1+ pos))))))))
+
 (defun mochi--collect-class-io (text)
   "Walk every `model NAME ... end NAME;' block in TEXT and return an alist
-mapping the class name (string) to (list inputs outputs), each a list of
-declared identifier names."
+mapping the class name (string) to (list inputs outputs extends-parents),
+where each list element is a list of identifier name strings.  The
+`extends-parents' list lets the IO scanner walk up the inheritance
+chain to inherit `input'/`output' declarations from base classes."
   (let ((classes '())
         (search-from 0)
         (len (length text)))
@@ -429,12 +463,34 @@ declared identifier names."
                   (let ((body (subseq text name-end end-pos)))
                     (push (list cname
                                 (mochi--scan-keyword body "input")
-                                (mochi--scan-keyword body "output"))
+                                (mochi--scan-keyword body "output")
+                                (mochi--scan-extends body))
                           classes))
                   (setf search-from (+ end-pos (length terminator))))
                  (t (setf search-from name-end)))))
             (t (setf search-from (1+ kw-pos)))))
         (when (>= search-from len) (return (nreverse classes)))))))
+
+(defun mochi--inherited-io (class-name class-table seen)
+  "Recursively walk CLASS-NAME's extends parents in CLASS-TABLE,
+returning (values inherited-inputs inherited-outputs).  SEEN is the
+set of class names already visited (to break cycles)."
+  (let ((entry (assoc class-name class-table :test #'string=))
+        (inputs '())
+        (outputs '()))
+    (when (and entry (not (member class-name seen :test #'string=)))
+      (let ((parents (fourth entry))
+            (seen (cons class-name seen)))
+        (dolist (parent parents)
+          (let ((parent-entry (assoc parent class-table :test #'string=)))
+            (when parent-entry
+              (setf inputs  (append inputs  (second parent-entry)))
+              (setf outputs (append outputs (third  parent-entry)))
+              (multiple-value-bind (gi go)
+                  (mochi--inherited-io parent class-table seen)
+                (setf inputs  (append inputs  gi))
+                (setf outputs (append outputs go))))))))
+    (values inputs outputs)))
 
 (defun mochi--read-ident-at (text start)
   "Read a (possibly empty) identifier from TEXT starting at START.
@@ -547,19 +603,24 @@ inputs."
 (defun mochi--scan-io (mo-path)
   "Return (values inputs outputs) for the top-level model.  Combines:
   (a) `input Real X' and `output Real X' declarations in the top-level
-      model's own body, and
-  (b) variables exposed via component instances: each `Type instance' line
+      model's own body,
+  (b) inputs/outputs inherited from each parent listed in the top-level
+      model's `extends' clauses (transitively), and
+  (c) variables exposed via component instances: each `Type instance' line
       contributes that class's inputs as `instance.var' and similarly for
       outputs."
   (let* ((text (mochi--strip-comments (mochi--read-file mo-path)))
+         (top-name (nth-value 0 (mochi--top-model-block text)))
          (top-body (or (nth-value 1 (mochi--top-model-block text)) text))
          (class-table (mochi--collect-class-io text))
          (own-inputs (mochi--scan-keyword top-body "input"))
          (own-outputs (mochi--scan-keyword top-body "output")))
-    (multiple-value-bind (inst-inputs inst-outputs)
-        (mochi--scan-instances top-body class-table)
-      (values (append own-inputs inst-inputs)
-              (append own-outputs inst-outputs)))))
+    (multiple-value-bind (inh-inputs inh-outputs)
+        (mochi--inherited-io top-name class-table nil)
+      (multiple-value-bind (inst-inputs inst-outputs)
+          (mochi--scan-instances top-body class-table)
+        (values (append own-inputs inh-inputs inst-inputs)
+                (append own-outputs inh-outputs inst-outputs))))))
 
 (defun mochi--model-name-from-source (mo-path)
   "Top-level model name (the *last* `model NAME' in the file)."
@@ -682,7 +743,17 @@ uses that as the explicit model name to compile."
                                  raw-states))
              (input-syms  (mapcar #'mochi--mxsym inputs))
              (output-syms (mapcar #'mochi--mxsym outputs))
-             (alg-from-y  (mochi--algebraic-symbols raw-algebraics))
+             ;; rumoca's :y list is "everything else" from its perspective.
+             ;; That sometimes includes variables that mochi has already
+             ;; classified as inputs or outputs by walking the source --
+             ;; typically `inst.Vin' style names in instance-composed
+             ;; models, where the inner class declared `input Real Vin'.
+             ;; Subtract so they don't end up double-classified (which
+             ;; would make the residual system underdetermined when we
+             ;; solve for the algebraics).
+             (alg-from-y-raw (mochi--algebraic-symbols raw-algebraics))
+             (alg-from-y  (set-difference alg-from-y-raw
+                                          (append input-syms output-syms)))
              (known-syms  (append param-syms state-syms deriv-syms
                                   input-syms output-syms alg-from-y))
              ;; Anything in residuals that isn't one of the above must be

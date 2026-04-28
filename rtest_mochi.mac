@@ -287,6 +287,57 @@ true;
 is(ssearch("Vin -> iL", dot_str) # false);
 true;
 
+/* ---- extends inheritance ----
+   RCFilterExtends builds the same RC plant as RCFilter, but uses a
+   `partial model OnePort' base class that the Resistor / Capacitor /
+   VoltageSource components extend.  rumoca flattens the inheritance
+   into the JSON DAE; mochi has to (a) inherit `input'/`output'
+   declarations from the parent class via the `extends' clause, and
+   (b) avoid double-classifying input symbols that rumoca lists in
+   its :y algebraics.  The dynamics must match the non-extends
+   version. */
+
+(m_rcx : mod_load("examples/extends/RCFilterExtends.mo"), true);
+true;
+
+mod_get(m_rcx, 'name);
+"RCFilterExtends";
+
+length(mod_get(m_rcx, 'states));
+1;
+
+/* The free input is `vs.Vin' — declared `input Real Vin' inside the
+   VoltageSource class.  VoltageSource extends OnePort, so the input
+   declaration sits alongside the inherited ElectricalPin ports. */
+mod_get(m_rcx, 'inputs);
+[vs_Vin];
+
+mod_get(m_rcx, 'outputs);
+[v_cap];
+
+/* Same dynamics as the original RCFilter: A = -1/(R*Ccap) = -2,
+   B = 1/(R*Ccap) = 2, C = 1, D = 0. */
+([Arcx, Brcx, Crcx, Drcx] : mod_state_space(m_rcx,
+                                             [c1_vC = 0, vs_Vin = 0]),
+ true);
+true;
+
+Arcx;
+matrix([-2.0]);
+
+Brcx;
+matrix([2.0]);
+
+Crcx;
+matrix([1.0]);
+
+/* Step response settles at 1 (DC gain = 1). */
+([t_rcx, y_rcx] : mod_step(m_rcx, [c1_vC = 0, vs_Vin = 0], 5.0), true);
+true;
+
+is(abs(last(y_rcx) - 1.0) < 0.01);
+true;
+
 /* ---- mod_diagram ----
    One-shot front-end: emit a dataflow diagram in DOT (default) or
    Mermaid form and render it via `dot' / `mmdc' to a temp .svg file
