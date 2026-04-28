@@ -13,7 +13,7 @@ This notebook walks through:
 5. Pointers on stiff systems and tolerances.
 
 
-```
+```maxima
 /* Setup: core mochi + the optional nonlinear subsystem.
    numerics-sundials is a hard dep here — it provides np_cvode. */
 load("../../mochi.mac")$
@@ -46,7 +46,7 @@ end Pendulum;
 Two states (angle $\theta$, angular velocity $\omega$), one input (applied torque $\tau$), one output ($\theta$). The nonlinearity is in $\sin\theta$ — the small-angle linearisation replaces it with $\theta$.
 
 
-```
+```maxima
 m : mod_load("../Pendulum.mo")$
 mod_print(m)$
 ```
@@ -70,7 +70,7 @@ Notice the residual `der_omega + g·sin(theta)/L + b·omega - tau = 0` — `mod_
 Apply a torque step of $\tau = 5$ N·m for 6 seconds, starting from rest. The **linear** simulation thinks gravity is $-\frac{g}{L}\theta$ (a Hookean spring); the **nonlinear** one keeps the actual $-\frac{g}{L}\sin\theta$.
 
 
-```
+```maxima
 [t_lin, y_lin] : mod_step(m, [theta=0, omega=0, tau=0], 6.0,
                            ['magnitude = 5])$
 [t_nl,  y_nl]  : mod_step_nonlinear(m, [0.0, 0.0], 6.0,
@@ -88,6 +88,10 @@ ax_draw2d(
 ```
 
 
+    
+![svg](03_nonlinear_files/03_nonlinear_6_0.svg)
+    
+
 
 For the first ~0.5 s the angle stays small ($\sin\theta \approx \theta$ holds) and the two curves overlap. After that the nonlinear curve climbs further (the linear "spring" pulls harder than the real gravity does once $\theta$ grows past $\sim\pi/4$) and the periods diverge. Past $t \approx 2$ s the trajectories are qualitatively different.
 
@@ -96,7 +100,7 @@ For the first ~0.5 s the angle stays small ($\sin\theta \approx \theta$ holds) a
 Release the pendulum from $\theta_0 = 2.5$ rad ($\approx 143°$) with no torque. Linearised theory predicts a sinusoid with period $T = 2\pi\sqrt{L/g} \approx 2.006$ s; the true large-amplitude pendulum has a longer period (you can derive it as a complete elliptic integral, but here we just integrate it).
 
 
-```
+```maxima
 [t_free, y_free] : mod_simulate_nonlinear(m, [theta=2.5, omega=0.0],
                                            lambda([t], [0.0]),
                                            10.0)$
@@ -112,6 +116,10 @@ ax_draw2d(
 ```
 
 
+    
+![svg](03_nonlinear_files/03_nonlinear_9_0.svg)
+    
+
 
 The trajectory is asymmetric and the period is noticeably longer than the small-angle value — both classic large-amplitude pendulum effects. The amplitude decays because of the $-b\omega$ damping term in the model.
 
@@ -120,7 +128,7 @@ The trajectory is asymmetric and the period is noticeably longer than the small-
 `mod_simulate_nonlinear` takes any input function `lambda([t], [u1, u2, ...])`. Here's a sinusoidal torque (with the pendulum starting from rest):
 
 
-```
+```maxima
 [t_sin, y_sin] : mod_simulate_nonlinear(m, [0.0, 0.0],
                                          lambda([t], [3*sin(2*t)]),
                                          8.0)$
@@ -137,6 +145,10 @@ ax_draw2d(
 ```
 
 
+    
+![svg](03_nonlinear_files/03_nonlinear_12_0.svg)
+    
+
 
 Under a periodic forcing the response is also periodic but distorted — you can see the asymmetry from the `sin(theta)` term modulating the swing.
 
@@ -151,7 +163,7 @@ Under a periodic forcing the response is also periodic but distorted — you can
 There's also `'return = 'states` if you want the full state trajectory instead of just the outputs:
 
 
-```
+```maxima
 [t, x_traj] : mod_simulate_nonlinear(m, [theta=2.5, omega=0.0],
                                        lambda([t], [0.0]),
                                        4.0,
@@ -174,6 +186,10 @@ ax_draw2d(
 )$
 ```
 
+
+    
+![svg](03_nonlinear_files/03_nonlinear_15_0.svg)
+    
 
 
 The phase portrait shows the trajectory spiralling toward the origin (the stable equilibrium at $\theta = 0$) under viscous damping — a clear two-state picture you can't get from the output trajectory alone.

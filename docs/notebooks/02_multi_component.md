@@ -10,7 +10,7 @@ Sections:
 
 
 
-```
+```maxima
 /* Load the package and helpers. */
 load("../../mochi.mac")$
 load("numerics")$
@@ -32,7 +32,7 @@ like `tank1.h` to Maxima-safe `tank1_h`. Connector-internal variables (e.g. each
 `q_in`/`q_out`) are auto-classified as algebraic and solved away.
 
 
-```
+```maxima
 m_tt : mod_load("../TwoTanks.mo")$
 mod_print(m_tt)$
 ```
@@ -54,7 +54,7 @@ mod_print(m_tt)$
          level2-tank2_h  = 0
 
 
-```
+```maxima
 [Att, Btt, Ctt, Dtt] : mod_state_space(m_tt, [tank1_h = 0, tank2_h = 0, source = 0])$
 print("TwoTanks A:")$ Att;
 print("TwoTanks B:")$ Btt;
@@ -70,12 +70,12 @@ print("TwoTanks C:")$ Ctt;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi 0.0&1.0\cr\ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} 0.0&1.0\end{pmatrix}  $$
 
 
 
 
-```
+```maxima
 [t_tt, y_tt] : mod_step(m_tt, [tank1_h = 0, tank2_h = 0, source = 0], 25.0)$
 ax_draw2d(
   color="blue", line_width=2, name="level2(t)",
@@ -88,6 +88,10 @@ ax_draw2d(
 ```
 
 
+    
+![svg](02_multi_component_files/02_multi_component_5_0.svg)
+    
+
 
 ## 6. Modelica `connect()` syntax — RC low-pass filter
 
@@ -97,7 +101,7 @@ expands each connect into Kirchhoff-style equations (potentials equate, flows su
 mochi sees the JSON.
 
 
-```
+```maxima
 m_rc : mod_load("../RCFilter.mo")$
 mod_print(m_rc)$
 ```
@@ -128,7 +132,7 @@ mod_print(m_rc)$
          gnd_p_v-vs_n_v  = 0
 
 
-```
+```maxima
 [A_rc, B_rc, C_rc, D_rc] : mod_state_space(m_rc, [c1_v = 0, vs_Vin = 0])$
 print("RC filter A:")$ A_rc;
 print("RC filter B:")$ B_rc;
@@ -144,12 +148,12 @@ print("RC filter C:")$ C_rc;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi 1.0\cr\ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} 1.0\end{pmatrix}  $$
 
 
 
 
-```
+```maxima
 [t_rc, y_rc] : mod_step(m_rc, [c1_v = 0, vs_Vin = 0], 5.0)$
 ax_draw2d(
   color="blue", line_width=2, name="v_cap(t)",
@@ -161,6 +165,10 @@ ax_draw2d(
 )$
 ```
 
+
+    
+![svg](02_multi_component_files/02_multi_component_9_0.svg)
+    
 
 
 ## 7. Dataflow diagrams
@@ -183,7 +191,7 @@ $$\frac{di_L}{dt} = -2\,i_L \;-\; 2\,v_C \;+\; 2\,V_{in}, \qquad \frac{dv_C}{dt}
 The `'renderer` option picks the engine: `'dot` (GraphViz, default) or `'mermaid` (Mermaid CLI). For raw text output use `mod_to_dot`, `mod_to_mermaid`, or `mod_dataflow(m, op, ['format = 'edges])` for the raw `[from, to, weight]` list.
 
 
-```
+```maxima
 mod_diagram(m_rlc, [iL = 0, vC = 0, Vin = 0])$
 ```
 
@@ -204,7 +212,7 @@ Reading the edges (default R=1, C=½):
 i.e. the standard RC low-pass $\dot v_C = -\tfrac{1}{RC}\, v_C + \tfrac{1}{RC}\, V_{in}$ that we step-tested in section 6.
 
 
-```
+```maxima
 mod_diagram(m_rc, [c1_v = 0, vs_Vin = 0])$
 ```
 

@@ -15,7 +15,12 @@
 #   make FORMAT=markdown OUTPUT_DIR=docs/notebooks
 
 AXIMAR_MCP ?= aximar-mcp
-FORMAT      ?= markdown
+# maxima_markdown comes from maxima-nbconvert: it runs the same LaTeX
+# cleanup + Plotly→SVG preprocessors as the HTML/PDF exporters, so the
+# rendered .md is GitHub-friendly (MathJax-clean math, SVG plots in a
+# _files/ subdirectory).  Override with FORMAT=markdown to get the
+# unprocessed nbconvert default.
+FORMAT      ?= maxima_markdown
 OUTPUT_DIR  ?= docs/notebooks
 
 NOTEBOOKS  := $(wildcard examples/notebooks/*.macnb)

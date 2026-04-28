@@ -10,7 +10,7 @@ This notebook walks through the bread-and-butter linear-control workflow on a fe
 Everything here uses the linearisation around an operating point. For nonlinear simulation see `03_nonlinear.macnb`.
 
 
-```
+```maxima
 /* Load the package and helpers. */
 load("../../mochi.mac")$
 load("numerics")$
@@ -30,7 +30,7 @@ A series RLC driven by a voltage source. States: inductor current $i_L$, capacit
 Output: capacitor voltage.
 
 
-```
+```maxima
 m_rlc : mod_load("../RLCircuit.mo")$
 mod_print(m_rlc)$
 ```
@@ -50,7 +50,7 @@ mod_print(m_rlc)$
 Linearise at the equilibrium $i_L = v_C = V_{in} = 0$:
 
 
-```
+```maxima
 [A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$
 print("A =")$ A;
 print("B =")$ B;
@@ -69,14 +69,14 @@ print("D =")$ D;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi 0.0\cr\ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} 0.0\end{pmatrix}  $$
 
 
 
 ### Step response
 
 
-```
+```maxima
 dt : 0.05$ nt : 300$
 t_sim : makelist(i * dt, i, 0, nt - 1)$
 y_rlc : sim_step(A, B, C, dt, nt)$
@@ -92,11 +92,15 @@ ax_draw2d(
 ```
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_7_0.svg)
+    
+
 
 ### Closed-loop poles
 
 
-```
+```maxima
 [re_p, im_p] : poles_of(A)$
 ax_draw2d(
   marker_size=10, color="red", name="poles",
@@ -109,13 +113,17 @@ ax_draw2d(
 ```
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_9_0.svg)
+    
+
 
 ### Override parameters
 
 A different physical motor with $R=2, L=0.4, C=0.5$:
 
 
-```
+```maxima
 [A2, B2, C2, D2] : mod_state_space(m_rlc,
                                           [iL = 0, vC = 0, Vin = 0],
                                           [R = 2, L = 0.4, Ccap = 0.5])$
@@ -137,13 +145,17 @@ ax_draw2d(
     matrix([-5.0,-2.5],[2.0,0.0])
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_11_1.svg)
+    
+
 
 ## 2. DC motor
 
 Armature current $i_a$, angular speed $\omega$. Input: armature voltage $v_a$. Output: speed.
 
 
-```
+```maxima
 m_motor : mod_load("../DCMotor.mo")$
 mod_print(m_motor)$
 ```
@@ -161,7 +173,7 @@ mod_print(m_motor)$
          y-omega  = 0
 
 
-```
+```maxima
 [Am, Bm, Cm, Dm] : mod_state_space(m_motor, [ia = 0, omega = 0, va = 0])$
 print("DC motor A =")$ Am;
 print("DC motor B =")$ Bm;
@@ -174,7 +186,7 @@ print("DC motor B =")$ Bm;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi 100.0\cr 0.0\cr\ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} 100.0\\ 0.0\end{pmatrix}  $$
 
 
 
@@ -182,7 +194,7 @@ The DC motor has one fast pole (electrical, $\sim -100$ rad/s) and one slow pole
 (mechanical) — the response shows both timescales.
 
 
-```
+```maxima
 dt_m : 0.001$ nt_m : 5000$
 t_sim_m : makelist(i * dt_m, i, 0, nt_m - 1)$
 y_motor : sim_step(Am, Bm, Cm, dt_m, nt_m)$
@@ -197,9 +209,13 @@ ax_draw2d(
 ```
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_16_0.svg)
+    
 
 
-```
+
+```maxima
 [re_m, im_m] : poles_of(Am)$
 ax_draw2d(
   marker_size=10, color="red", name="poles",
@@ -212,13 +228,17 @@ ax_draw2d(
 ```
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_17_0.svg)
+    
+
 
 ## 3. Double tank cascade
 
 Two tanks, gravity flow with linear outlet coefficients.
 
 
-```
+```maxima
 m_tank : mod_load("../DoubleTank.mo")$
 mod_print(m_tank)$
 ```
@@ -236,7 +256,7 @@ mod_print(m_tank)$
          y-h2  = 0
 
 
-```
+```maxima
 [At, Bt, Ct, Dt] : mod_state_space(m_tank, [h1 = 0, h2 = 0, q_in = 0])$
 print("Double-tank A =")$ At;
 ```
@@ -246,12 +266,12 @@ print("Double-tank A =")$ At;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi -0.5&0.0\cr 0.5&-0.3\cr \ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} -0.5&0.0\\ 0.5&-0.3\end{pmatrix}  $$
 
 
 
 
-```
+```maxima
 dt_t : 0.1$ nt_t : 300$
 t_sim_t : makelist(i * dt_t, i, 0, nt_t - 1)$
 y_tank : sim_step(At, Bt, Ct, dt_t, nt_t)$
@@ -266,9 +286,13 @@ ax_draw2d(
 ```
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_21_0.svg)
+    
 
 
-```
+
+```maxima
 [re_t, im_t] : poles_of(At)$
 ax_draw2d(
   marker_size=10, color="red", name="poles",
@@ -281,6 +305,10 @@ ax_draw2d(
 ```
 
 
+    
+![svg](01_linear_analysis_files/01_linear_analysis_22_0.svg)
+    
+
 
 ## 4. New API: symbolic SS, transfer function, interconnection
 
@@ -292,7 +320,7 @@ The package also exposes:
 - `mod_simulate(m, op, u_fn, t_end)` — generic input-driven simulation; `mod_step`, `mod_impulse` are wrappers.
 
 
-```
+```maxima
 /* Symbolic state-space — useful for inspecting structure */
 [As, Bs, Cs, Ds] : mod_state_space_symbolic(m_rlc, [iL = 0, vC = 0, Vin = 0])$
 print("Symbolic A:")$ As;
@@ -306,12 +334,12 @@ print("Symbolic B:")$ Bs;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi {{1}\over{L}}\cr 0\cr \ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} {{1}\over{L}}\\ 0\end{pmatrix}  $$
 
 
 
 
-```
+```maxima
 /* Transfer function */
 H_rlc : mod_transfer_function(m_rlc, [iL = 0, vC = 0, Vin = 0])$
 print("H(s) =")$ H_rlc;
@@ -326,7 +354,7 @@ print("(closed form: 1 / (LCs² + RCs + 1) = 1 / (0.5 s² + s + 1))")$
     (closed form: 1 / (LCs² + RCs + 1) = 1 / (0.5 s² + s + 1))
 
 
-```
+```maxima
 /* Cascade two RLCs and plot the impulse response of the 4-state composite */
 SS_rlc : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$
 [Ac, Bc, Cc, Dc] : mod_cascade(SS_rlc, SS_rlc)$
@@ -339,12 +367,12 @@ Ac;
 
 
 
-\ifx\endpmatrix\undefined\pmatrix{\else\begin{pmatrix}\fi -2.0&-2.0&0&0\cr1.0&0.0&0&0\cr 0.0&2.0&-2.0&-2.0\cr 0.0&0.0&1.0&0.0\cr\ifx\endpmatrix\undefined}\else\end{pmatrix}\fi 
+$$ \begin{pmatrix} -2.0&-2.0&0&0\\1.0&0.0&0&0\\ 0.0&2.0&-2.0&-2.0\\ 0.0&0.0&1.0&0.0\end{pmatrix}  $$
 
 
 
 
-```
+```maxima
 /* Impulse response of the RLC */
 [t_imp, y_imp] : mod_impulse(m_rlc, [iL = 0, vC = 0, Vin = 0], 8.0)$
 ax_draw2d(
@@ -357,4 +385,8 @@ ax_draw2d(
 )$
 ```
 
+
+    
+![svg](01_linear_analysis_files/01_linear_analysis_27_0.svg)
+    
 
