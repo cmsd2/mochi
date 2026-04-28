@@ -73,7 +73,33 @@ SS  : mod_state_space(m, [iL = 0, vC = 0, Vin = 0])$
 SS2 : mod_cascade(SS, SS)$            /* output of 1 → input of 2 */
 SS3 : mod_parallel(SS, SS)$           /* same input, sum outputs */
 SS4 : mod_unity_feedback(SS, 2.0)$    /* close loop with K = 2 */
+
+/* Render a dataflow diagram inline.  mod_diagram is the one-shot
+   front-end: it builds the diagram source and pipes it through the
+   chosen renderer to an SVG in the Maxima temp directory; the notebook
+   UI picks up the printed path and embeds it as image/svg+xml. */
+mod_diagram(m, [iL = 0, vC = 0, Vin = 0])$
+mod_diagram(m, [iL = 0, vC = 0, Vin = 0], ['renderer = 'mermaid])$
+
+/* Or get the diagram as text (Mermaid / GraphViz DOT / raw edges) */
+mod_to_mermaid(m, [iL = 0, vC = 0, Vin = 0]);
+mod_to_dot    (m, [iL = 0, vC = 0, Vin = 0]);
+mod_dataflow  (m, [iL = 0, vC = 0, Vin = 0], ['format = 'edges]);
 ```
+
+`mod_diagram` accepts:
+
+- `'diagram` — only `'dataflow` is supported right now (default).
+- `'renderer` — `'dot` (GraphViz, default) or `'mermaid` (Mermaid CLI).
+- `'threshold`, `'params` — passed through to `mod_dataflow` /
+  `mod_state_space`.
+
+Renderer prerequisites:
+
+- **`'dot`**  — GraphViz on `$PATH` (or set `DOT_BIN`). `brew install graphviz`.
+- **`'mermaid`** — Mermaid CLI on `$PATH` (or set `MMDC_BIN`):
+  `npm install -g @mermaid-js/mermaid-cli`. The CLI itself depends on a
+  headless Chrome via puppeteer.
 
 `mod_state_space` returns numeric matrices `A, B, C, D` such that the linearisation around the operating point is
 

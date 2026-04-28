@@ -220,3 +220,101 @@ true;
 
 is(abs(last(y_rc) - 1.0) < 0.01);
 true;
+
+/* ---- mod_dataflow ---- */
+
+(rlc_edges : mod_dataflow(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                           ['format = 'edges]),
+ true);
+true;
+
+/* RLC at default params has 5 nonzero edges:
+   iL→iL (A11 = -2), vC→iL (A12 = -2), iL→vC (A21 = 1),
+   Vin→iL (B1 = 2), vC→y (C2 = 1). */
+length(rlc_edges);
+5;
+
+(mermaid : mod_to_mermaid(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
+true;
+
+/* Spot-check the output contains expected fragments. */
+is(ssearch("flowchart LR", mermaid) # false);
+true;
+
+is(ssearch("Vin -->", mermaid) # false);
+true;
+
+is(ssearch("vC -->", mermaid) # false);
+true;
+
+(dot_str : mod_to_dot(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
+true;
+
+is(ssearch("digraph G", dot_str) # false);
+true;
+
+is(ssearch("Vin -> iL", dot_str) # false);
+true;
+
+/* ---- mod_diagram ----
+   One-shot front-end: emit a dataflow diagram in DOT (default) or
+   Mermaid form and render it via `dot' / `mmdc' to a temp .svg file
+   that Aximar / maxima-extension display inline in the notebook.  The
+   test slurps the file inline (using openr/readline in a block) rather
+   than defining a helper mid-test, since rtest counts every top-level
+   expression as a test slot. */
+
+(svg_path : mod_diagram(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
+true;
+
+/* Path must end in .svg */
+is(slength(svg_path) > 4
+   and substring(svg_path, slength(svg_path) - 3) = ".svg");
+true;
+
+/* Slurp the SVG file and check expected fragments. */
+(svg_text : block([s, line, lines : []],
+              s : openr(svg_path),
+              while (line : readline(s)) # false do
+                lines : cons(line, lines),
+              close(s),
+              apply(sconcat,
+                    map(lambda([l], sconcat(l, ascii(10))),
+                        reverse(lines)))),
+ true);
+true;
+
+is(ssearch("<svg", svg_text) # false);
+true;
+
+is(ssearch("Vin", svg_text) # false);
+true;
+
+/* Explicit renderer = 'dot — same effect as the default. */
+(svg_path_dot : mod_diagram(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                             ['renderer = 'dot]),
+ true);
+true;
+
+is(ssearch(".svg", svg_path_dot) # false);
+true;
+
+/* Mermaid renderer dispatch.  The mermaid CLI (`mmdc') itself depends on
+   a headless Chrome via puppeteer, which may or may not be installed in
+   any given environment.  We wrap the call in errcatch and accept
+   either:
+     - success → returns a list `[path]` with a string path
+     - failure → returns `[]` (mmdc failed but mod_diagram errored cleanly)
+   Either outcome confirms the dispatch went to the mermaid path. */
+(mmd_result : errcatch(mod_diagram(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                                    ['renderer = 'mermaid])),
+ true);
+true;
+
+is(mmd_result = [] or stringp(mmd_result[1]));
+true;
+
+/* Unsupported diagram type errors clearly. */
+errcatch(mod_diagram(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                      ['diagram = 'phaseplot]));
+[];

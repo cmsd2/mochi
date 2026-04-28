@@ -52,6 +52,106 @@ system)."
                       (list name))))
     (uiop:run-program cmd :output :string :directory dir)))
 
+;; --- Locating the diagram renderers (`dot' / `mmdc') -------------------
+
+(defun mochi--dot-bin ()
+  "Resolve the GraphViz `dot' executable.  Honours $DOT_BIN, then probes
+the common Homebrew / system locations, then falls back to plain `dot'
+on $PATH (which may not be inherited from the GUI launcher on macOS)."
+  (or (uiop:getenv "DOT_BIN")
+      (loop for cand in '("/opt/homebrew/bin/dot"
+                          "/usr/local/bin/dot"
+                          "/usr/bin/dot")
+            when (probe-file cand)
+              return cand)
+      "dot"))
+
+(defun mochi--mmdc-bin ()
+  "Resolve the Mermaid CLI executable (`mmdc').  Honours $MMDC_BIN, then
+probes the common Homebrew / system locations, then falls back to plain
+`mmdc' on $PATH."
+  (or (uiop:getenv "MMDC_BIN")
+      (loop for cand in '("/opt/homebrew/bin/mmdc"
+                          "/usr/local/bin/mmdc"
+                          "/usr/bin/mmdc")
+            when (probe-file cand)
+              return cand)
+      "mmdc"))
+
+(defun mochi--temp-dir ()
+  "Resolve a temp directory ending in a path separator.  Prefers Maxima's
+$maxima_tempdir (which the maxima-extension sets up), falling back to
+the OS default."
+  (namestring
+   (uiop:ensure-directory-pathname
+    (or (and (boundp '$maxima_tempdir)
+             (stringp $maxima_tempdir)
+             (not (string= $maxima_tempdir ""))
+             $maxima_tempdir)
+        (namestring (uiop:temporary-directory))))))
+
+(defun mochi--write-temp (source extension)
+  "Write SOURCE (a string) to a fresh file in the Maxima temp directory
+with the given EXTENSION (without dot).  Returns the path."
+  (let* ((temp-dir (mochi--temp-dir))
+         (stamp (format nil "~A_~A" (get-universal-time) (random 1000000)))
+         (path (format nil "~Amochi_~A.~A" temp-dir stamp extension)))
+    (with-open-file (s path :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string source s))
+    path))
+
+(defun mochi--svg-path-for (input-path)
+  "Mirror INPUT-PATH but with a .svg extension (uniqueness comes from the
+input path's stamp)."
+  (let ((dot (position #\. input-path :from-end t)))
+    (concatenate 'string (subseq input-path 0 dot) ".svg")))
+
+(defun mochi--emit-svg-path (svg-path)
+  "Print SVG-PATH quoted on its own line so the maxima-extension / Aximar
+parser recognises it as an inline image/svg+xml display output."
+  (format t "\"~A\"~%" svg-path))
+
+(defun $mod__render_dot_to_svg (dot-source)
+  "Render DOT source to a temp .svg file via the GraphViz `dot' binary.
+Prints the path quoted so Aximar picks it up as image/svg+xml, and
+returns the path as a Maxima string."
+  (unless (stringp dot-source)
+    (merror "mod__render_dot_to_svg: expected a string, got: ~M" dot-source))
+  (let* ((dot-path (mochi--write-temp dot-source "dot"))
+         (svg-path (mochi--svg-path-for dot-path)))
+    (handler-case
+        (uiop:run-program (list (mochi--dot-bin) "-Tsvg" dot-path "-o" svg-path)
+                          :output :string
+                          :error-output :string)
+      (error (e)
+        (merror "mod__render_dot_to_svg: dot failed (~A).  Is GraphViz installed and on $PATH or $DOT_BIN?"
+                e)))
+    (mochi--emit-svg-path svg-path)
+    svg-path))
+
+(defun $mod__render_mermaid_to_svg (mermaid-source)
+  "Render Mermaid source to a temp .svg file via the Mermaid CLI (`mmdc').
+Prints the path quoted so Aximar picks it up as image/svg+xml, and
+returns the path as a Maxima string."
+  (unless (stringp mermaid-source)
+    (merror "mod__render_mermaid_to_svg: expected a string, got: ~M" mermaid-source))
+  (let* ((mmd-path (mochi--write-temp mermaid-source "mmd"))
+         (svg-path (mochi--svg-path-for mmd-path)))
+    (handler-case
+        (uiop:run-program (list (mochi--mmdc-bin)
+                                "-i" mmd-path
+                                "-o" svg-path
+                                "--quiet")
+                          :output :string
+                          :error-output :string)
+      (error (e)
+        (merror "mod__render_mermaid_to_svg: mmdc failed (~A).  Install with `npm install -g @mermaid-js/mermaid-cli', or set $MMDC_BIN."
+                e)))
+    (mochi--emit-svg-path svg-path)
+    svg-path))
+
 ;; --- Maxima expression construction helpers ----------------------------
 
 (defun mochi--maxima-case-invert (s)

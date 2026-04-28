@@ -30,6 +30,14 @@
  *                                          substituted to defaults
  *   mod_transfer_function(m, op, params) — with parameter overrides
  *
+ *   mod_dataflow(m, op, [opts])          — state-space dataflow diagram
+ *                                          opts: format = 'mermaid (default)
+ *                                                       | 'dot | 'edges
+ *                                                threshold = 1e-12
+ *                                                params = [...]
+ *   mod_to_mermaid(m, op, [params])      — shorthand: format='mermaid
+ *   mod_to_dot(m, op, [params])          — shorthand: format='dot
+ *
  * A model struct is a list of [tag, value] pairs:
  *   [['name = ..., 'params = ..., 'states = ..., 'derivs = ...,
  *     'inputs = ..., 'outputs = ..., 'initial = ..., 'residuals = ...]]
@@ -357,3 +365,173 @@ mod__assoc(sym, eqs) := block([e, found],
     if found = 'unset and lhs(e) = sym then found : e,
   if found = 'unset then error("mod__assoc: ", sym, " not found"),
   found)$
+
+/* ---- Dataflow diagrams ------------------------------------------ */
+/*
+ * mod_dataflow(m, op_point, [opts])
+ *
+ * Renders the linearised state-space connectivity as a dataflow diagram.
+ * Nonzero entries of A/B/C/D become labelled edges:
+ *
+ *   B[i,j] ≠ 0   →   input[j] ──> state[i]   (label: B[i,j])
+ *   A[i,j] ≠ 0   →   state[j] ──> state[i]   (label: A[i,j])
+ *   C[k,i] ≠ 0   →   state[i] ──> output[k]  (label: C[k,i])
+ *   D[k,j] ≠ 0   →   input[j] ──> output[k]  (label: D[k,j])
+ *
+ * opts (a list of equations, optional):
+ *   format     — 'dot (default), 'mermaid, or 'edges (raw list)
+ *   threshold  — hide edges with |weight| below this  (default 1e-12)
+ *   params     — parameter override list, passed to mod_state_space
+ *
+ * Returns a Maxima string (for 'dot / 'mermaid) or the raw edge list
+ * `[[from, to, weight], ...]` (for 'edges).
+ */
+
+mod__format_weight(w) := block([fw, s],
+  fw : float(w),
+  /* round to 4 sig figs for readability */
+  s : string(fw),
+  if fw >= 0 then sconcat("+", s) else s)$
+
+mod__newline : ascii(10)$
+
+mod__emit_mermaid(states, inputs, outputs, edges) := block(
+  [parts, e],
+  parts : ["flowchart LR"],
+  parts : endcons("  classDef inputCls fill:#cdf,stroke:#246,color:#000", parts),
+  parts : endcons("  classDef stateCls fill:#fcc,stroke:#822,color:#000", parts),
+  parts : endcons("  classDef outputCls fill:#cfc,stroke:#282,color:#000", parts),
+  for s in inputs do
+    parts : endcons(sconcat("  ", string(s), "[", string(s), "]:::inputCls"), parts),
+  for s in states do
+    parts : endcons(sconcat("  ", string(s), "[", string(s), "]:::stateCls"), parts),
+  for s in outputs do
+    parts : endcons(sconcat("  ", string(s), "[", string(s), "]:::outputCls"), parts),
+  for e in edges do
+    parts : endcons(sconcat("  ", string(e[1]), " -->|\"",
+                            mod__format_weight(e[3]),
+                            "\"| ", string(e[2])), parts),
+  apply(sconcat, map(lambda([p], sconcat(p, mod__newline)), parts)))$
+
+mod__emit_dot(states, inputs, outputs, edges) := block(
+  [parts, e],
+  parts : ["digraph G {",
+           "  rankdir=LR;",
+           "  node [shape=box, style=filled, fontname=\"sans-serif\"];"],
+  for s in inputs do
+    parts : endcons(sconcat("  ", string(s), " [label=\"", string(s),
+                            "\", fillcolor=\"#cdf\"];"), parts),
+  for s in states do
+    parts : endcons(sconcat("  ", string(s), " [label=\"", string(s),
+                            "\", fillcolor=\"#fcc\"];"), parts),
+  for s in outputs do
+    parts : endcons(sconcat("  ", string(s), " [label=\"", string(s),
+                            "\", fillcolor=\"#cfc\"];"), parts),
+  for e in edges do
+    parts : endcons(sconcat("  ", string(e[1]), " -> ", string(e[2]),
+                            " [label=\"", mod__format_weight(e[3]),
+                            "\"];"), parts),
+  parts : endcons("}", parts),
+  apply(sconcat, map(lambda([p], sconcat(p, mod__newline)), parts)))$
+
+mod_dataflow(m, op_point, [opts]) := block(
+  [A, B, C, D, edges, fmt, threshold, params,
+   states, inputs, outputs, n, ni, no, i, j, w],
+  if length(opts) >= 1 then opts : opts[1] else opts : [],
+  fmt       : mod__opts_get(opts, 'format, 'dot),
+  threshold : mod__opts_get(opts, 'threshold, 1.0e-12),
+  params    : mod__opts_get(opts, 'params, []),
+  /* Linearise to numeric A, B, C, D */
+  if length(params) > 0 then
+    [A, B, C, D] : mod_state_space(m, op_point, params)
+  else
+    [A, B, C, D] : mod_state_space(m, op_point),
+  states  : mod_get(m, 'states),
+  inputs  : mod_get(m, 'inputs),
+  outputs : mod_get(m, 'outputs),
+  n  : length(states),
+  ni : length(inputs),
+  no : length(outputs),
+  edges : [],
+  /* state → state (via A) */
+  for i : 1 thru n do
+    for j : 1 thru n do block([w_],
+      w_ : A[i, j],
+      if abs(w_) > threshold then
+        edges : endcons([states[j], states[i], w_], edges)),
+  /* input → state (via B) */
+  for i : 1 thru n do
+    for j : 1 thru ni do block([w_],
+      w_ : B[i, j],
+      if abs(w_) > threshold then
+        edges : endcons([inputs[j], states[i], w_], edges)),
+  /* state → output (via C) */
+  for i : 1 thru no do
+    for j : 1 thru n do block([w_],
+      w_ : C[i, j],
+      if abs(w_) > threshold then
+        edges : endcons([states[j], outputs[i], w_], edges)),
+  /* input → output (via D, direct feedthrough) */
+  for i : 1 thru no do
+    for j : 1 thru ni do block([w_],
+      w_ : D[i, j],
+      if abs(w_) > threshold then
+        edges : endcons([inputs[j], outputs[i], w_], edges)),
+  /* Format */
+  if fmt = 'edges then edges
+  elseif fmt = 'mermaid then mod__emit_mermaid(states, inputs, outputs, edges)
+  elseif fmt = 'dot then mod__emit_dot(states, inputs, outputs, edges)
+  else error("mod_dataflow: unknown format ", fmt))$
+
+mod_to_mermaid(m, op_point, [params]) :=
+  if length(params) > 0
+    then mod_dataflow(m, op_point,
+                      ['format = 'mermaid, 'params = params[1]])
+    else mod_dataflow(m, op_point, ['format = 'mermaid])$
+
+mod_to_dot(m, op_point, [params]) :=
+  if length(params) > 0
+    then mod_dataflow(m, op_point,
+                      ['format = 'dot, 'params = params[1]])
+    else mod_dataflow(m, op_point, ['format = 'dot])$
+
+/* mod_diagram(m, op_point, [opts])
+ *
+ * One-shot front-end: emit a diagram of the model and render it to an
+ * inline SVG (the maxima-extension / Aximar notebook UI picks up the
+ * printed file path and displays it as image/svg+xml).
+ *
+ * Returns the SVG file path as a string.
+ *
+ * opts (a list of equations, optional):
+ *   diagram   — only 'dataflow is supported right now
+ *               (default 'dataflow)
+ *   renderer  — 'dot (GraphViz, default) or 'mermaid (Mermaid CLI).
+ *               'graphviz is accepted as an alias for 'dot.
+ *   threshold — hide edges with |weight| below this  (default 1e-12)
+ *   params    — parameter override list, passed to mod_state_space
+ *
+ * Requires the chosen renderer on $PATH:
+ *   'dot     — GraphViz `dot' (or set $DOT_BIN)
+ *   'mermaid — Mermaid CLI `mmdc' (or set $MMDC_BIN); install with
+ *              `npm install -g @mermaid-js/mermaid-cli'.
+ */
+mod_diagram(m, op_point, [opts]) := block(
+  [opts1, diagram_, renderer_, threshold_, params_, src],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  diagram_   : mod__opts_get(opts1, 'diagram, 'dataflow),
+  renderer_  : mod__opts_get(opts1, 'renderer, 'dot),
+  threshold_ : mod__opts_get(opts1, 'threshold, 1.0e-12),
+  params_    : mod__opts_get(opts1, 'params, []),
+  if renderer_ = 'graphviz then renderer_ : 'dot,
+  if diagram_ # 'dataflow then
+    error("mod_diagram: only 'dataflow is supported right now, got ", diagram_),
+  if not (renderer_ = 'dot or renderer_ = 'mermaid) then
+    error("mod_diagram: renderer must be 'dot or 'mermaid, got ", renderer_),
+  src : mod_dataflow(m, op_point,
+                      ['format = renderer_,
+                       'threshold = threshold_,
+                       'params = params_]),
+  if renderer_ = 'dot
+    then mod__render_dot_to_svg(src)
+    else mod__render_mermaid_to_svg(src))$
