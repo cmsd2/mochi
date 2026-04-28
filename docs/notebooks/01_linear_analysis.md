@@ -69,7 +69,9 @@ print("D =")$ D;
 
 
 
-$$ \begin{pmatrix} 0.0\end{pmatrix}  $$
+```math
+\begin{pmatrix} 0.0\end{pmatrix} 
+```
 
 
 
@@ -186,7 +188,9 @@ print("DC motor B =")$ Bm;
 
 
 
-$$ \begin{pmatrix} 100.0\\ 0.0\end{pmatrix}  $$
+```math
+\begin{pmatrix} 100.0\\ 0.0\end{pmatrix} 
+```
 
 
 
@@ -266,7 +270,9 @@ print("Double-tank A =")$ At;
 
 
 
-$$ \begin{pmatrix} -0.5&0.0\\ 0.5&-0.3\end{pmatrix}  $$
+```math
+\begin{pmatrix} -0.5&0.0\\ 0.5&-0.3\end{pmatrix} 
+```
 
 
 
@@ -334,7 +340,9 @@ print("Symbolic B:")$ Bs;
 
 
 
-$$ \begin{pmatrix} {{1}\over{L}}\\ 0\end{pmatrix}  $$
+```math
+\begin{pmatrix} {{1}\over{L}}\\ 0\end{pmatrix} 
+```
 
 
 
@@ -367,7 +375,9 @@ Ac;
 
 
 
-$$ \begin{pmatrix} -2.0&-2.0&0&0\\1.0&0.0&0&0\\ 0.0&2.0&-2.0&-2.0\\ 0.0&0.0&1.0&0.0\end{pmatrix}  $$
+```math
+\begin{pmatrix} -2.0&-2.0&0&0\\1.0&0.0&0&0\\ 0.0&2.0&-2.0&-2.0\\ 0.0&0.0&1.0&0.0\end{pmatrix} 
+```
 
 
 

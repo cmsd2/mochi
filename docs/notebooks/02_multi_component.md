@@ -70,7 +70,9 @@ print("TwoTanks C:")$ Ctt;
 
 
 
-$$ \begin{pmatrix} 0.0&1.0\end{pmatrix}  $$
+```math
+\begin{pmatrix} 0.0&1.0\end{pmatrix} 
+```
 
 
 
@@ -148,7 +150,9 @@ print("RC filter C:")$ C_rc;
 
 
 
-$$ \begin{pmatrix} 1.0\end{pmatrix}  $$
+```math
+\begin{pmatrix} 1.0\end{pmatrix} 
+```
 
 
 
