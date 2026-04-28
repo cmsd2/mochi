@@ -26,6 +26,37 @@ length(mod_get(m_rlc, 'outputs));
 length(mod_get(m_rlc, 'params));
 3;
 
+/* ---- mod__causalise ----
+   Symbolic causalisation: solve the residuals for derivative, algebraic,
+   and output variables and return explicit equation lists. */
+
+([der_eqs, alg_eqs, out_eqs] : mod__causalise(m_rlc), true);
+true;
+
+/* RLC has 2 states (iL, vC), 0 algebraics, 1 output (y). */
+length(der_eqs);
+2;
+
+length(alg_eqs);
+0;
+
+length(out_eqs);
+1;
+
+/* der(iL) = (Vin - vC - R*iL)/L — check by ratsimp against the expected RHS. */
+ratsimp(rhs(mod__assoc(der_iL, map(lambda([e], e[1] = e[2]), der_eqs)))
+        - (Vin - vC - R*iL)/L);
+0;
+
+/* der(vC) = iL/Ccap */
+ratsimp(rhs(mod__assoc(der_vC, map(lambda([e], e[1] = e[2]), der_eqs)))
+        - iL/Ccap);
+0;
+
+/* y = vC */
+ratsimp(rhs(mod__assoc(y, map(lambda([e], e[1] = e[2]), out_eqs))) - vC);
+0;
+
 /* ---- mod_state_space ---- */
 
 ([A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);

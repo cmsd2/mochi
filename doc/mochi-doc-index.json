@@ -1,8 +1,17 @@
 {
   "version": 1,
   "package": "mochi",
-  "source": "./doc/mochi.md",
+  "source": "doc/mochi.md",
   "symbols": {
+    "mod__causalise": {
+      "type": "Function",
+      "signature": "mod__causalise(m)",
+      "summary": "Symbolic causalisation: solve the model's residual equations for the derivative, algebraic, and output variables, returning explicit equation lists.",
+      "body_md": "Symbolic causalisation: solve the model's residual equations for the\nderivative, algebraic, and output variables, returning explicit equation\nlists.\n\n    [der_eqs, alg_eqs, output_eqs] = mod__causalise(m)\n\nEach returned list has shape `[[lhs_sym, rhs_expr], ...]` where the RHS is a\nMaxima expression in the states, inputs, and parameters. No parameter\nsubstitution and no operating-point substitution is applied — the result is\npurely symbolic.\n\nUsed directly by `mod_state_space` for the linearisation Jacobians, and by\n[`mochi-nonlinear`](https://github.com/cmsd2/mochi-nonlinear) for direct\nintegration of the nonlinear DAE without linearising first.\n\nErrors if the residuals can't be solved explicitly for the unknowns — that\nwould mean a true implicit algebraic loop, which needs a numeric solver\ninside the integration loop (lives in `mochi-nonlinear`).",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
     "mod_cascade": {
       "type": "Function",
       "signature": "mod_cascade(SS1, SS2)",
@@ -48,6 +57,15 @@
       "see_also": [],
       "section": "Definitions for mochi"
     },
+    "mod_impulse_nonlinear": {
+      "type": "Function",
+      "signature": "mod_impulse_nonlinear(m, x0, t_end, [opts])",
+      "summary": "Convenience wrappers over mod_simulate_nonlinear mirroring the linear mod_step / mod_impulse. Same opts plus 'input_index and 'magnitude.",
+      "body_md": "Convenience wrappers over `mod_simulate_nonlinear` mirroring the linear\n`mod_step` / `mod_impulse`. Same opts plus `'input_index` and `'magnitude`.",
+      "examples": [],
+      "see_also": [],
+      "section": "Subsystem: mochi-nonlinear"
+    },
     "mod_load": {
       "type": "Function",
       "signature": "mod_load(path)",
@@ -84,6 +102,15 @@
       "see_also": [],
       "section": "Definitions for mochi"
     },
+    "mod_simulate_nonlinear": {
+      "type": "Function",
+      "signature": "mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts])",
+      "summary": "Integrate the model's nonlinear DAE via SUNDIALS CVODE.",
+      "body_md": "Integrate the model's nonlinear DAE via SUNDIALS CVODE.\n\n- `x0` — initial state vector. Either a flat list of floats in the order\n  given by `mod_get(m, 'states)`, or a list of equations\n  `[state_sym = value, ...]`.\n- `u_fn` — `lambda([t], [u1, u2, ...])` returning the input vector.\n- `t_end` — end time.\n- `opts` — list of equations:\n  - `dt` — sample period (default `t_end/500`).\n  - `params` — parameter override list (default: `.mo` defaults).\n  - `method` — `'adams` (default, non-stiff) or `'bdf` (stiff systems).\n  - `rtol` — relative tolerance (default `1e-8`).\n  - `atol` — absolute tolerance (default `1e-8`).\n  - `return` — `'outputs` (default) or `'states` to get the full state\n    trajectory instead of the output trajectory.\n\nReturns `[t_list, y_list]`. For SISO `y_list` is a flat list; for\nmulti-output it's a list of length-`|outputs|` lists.",
+      "examples": [],
+      "see_also": [],
+      "section": "Subsystem: mochi-nonlinear"
+    },
     "mod_state_space": {
       "type": "Function",
       "signature": "mod_state_space(m, op_point, override_params)",
@@ -110,6 +137,15 @@
       "examples": [],
       "see_also": [],
       "section": "Definitions for mochi"
+    },
+    "mod_step_nonlinear": {
+      "type": "Function",
+      "signature": "mod_step_nonlinear(m, x0, t_end, [opts])",
+      "summary": "",
+      "body_md": "",
+      "examples": [],
+      "see_also": [],
+      "section": "Subsystem: mochi-nonlinear"
     },
     "mod_to_dot": {
       "type": "Function",
@@ -158,8 +194,12 @@
       "body_md": ""
     },
     {
+      "title": "Subsystem: mochi-nonlinear",
+      "body_md": "Direct nonlinear simulation of the original DAE — no linearisation, no\noperating-point assumption. Lives in `mochi-nonlinear.mac` and is loaded\non demand:\n\n```maxima\nload(\"mochi\");\nload(\"numerics-sundials\");      /* hard dep — provides np_cvode */\nload(\"mochi-nonlinear\");\n```\n\nThe hard dep on [`numerics-sundials`](https://github.com/cmsd2/numerics-sundials)\nis why this is a separate file rather than auto-loaded with mochi:\nusers doing pure linear analysis don't need SUNDIALS installed."
+    },
+    {
       "title": "Example",
-      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Step response and impulse response */\n[t, y_step] : mod_step(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n[t, y_imp]  : mod_impulse(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n\n/* Symbolic transfer function */\nH : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Compose a cascade of two RLCs */\nSS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n[A2, B2, C2, D2] : mod_cascade(SS, SS);\n\n/* Render a dataflow diagram inline */\nmod_diagram(m, [iL = 0, vC = 0, Vin = 0]);\n```"
+      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Step response and impulse response */\n[t, y_step] : mod_step(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n[t, y_imp]  : mod_impulse(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n\n/* Symbolic transfer function */\nH : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Compose a cascade of two RLCs */\nSS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n[A2, B2, C2, D2] : mod_cascade(SS, SS);\n\n/* Render a dataflow diagram inline */\nmod_diagram(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Direct nonlinear simulation (opt-in subsystem; needs numerics-sundials) */\nload(\"numerics-sundials\");\nload(\"mochi-nonlinear\");\nm_pend : mod_load(\"examples/Pendulum.mo\");\n[t, theta] : mod_step_nonlinear(m_pend, [0.0, 0.0], 4.0,\n                                 ['magnitude = 5]);\n```"
     },
     {
       "title": "Note: `mod_load` does not touch session state",

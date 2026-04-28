@@ -7,3 +7,8 @@ doc/book/
 doc/*.texi
 doc/*.expanded.md
 doc/*.info
+
+# Python venv for the notebook-rendering toolchain (uv)
+.venv/
+__pycache__/
+*.pyc

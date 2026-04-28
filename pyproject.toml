@@ -1,0 +1,11 @@
+[project]
+name = "mochi-notebooks"
+version = "0.1.0"
+description = "Tooling to execute and render the mochi example notebooks"
+requires-python = ">=3.13"
+dependencies = [
+    "maxima-nbconvert[plotly]",
+]
+
+[tool.uv.sources]
+maxima-nbconvert = { path = "../maxima-nbconvert", editable = true }

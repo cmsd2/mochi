@@ -258,12 +258,19 @@ cl-json wraps Pascal-case tags in `*' to preserve case."
        (error "mochi: unsupported binary op ~S" op-tag)))))
 
 (defun mochi--unary-to-maxima (body)
+  ;; rumoca's Unary node carries the operand under :rhs (not :arg).
+  ;; Fall back to :arg in case a future rumoca version normalises it.
   (let* ((op-node (mochi--get body :op))
          (op-tag (caar op-node))
-         (arg (mochi--ast-to-maxima (mochi--get body :arg))))
+         (arg-node (or (cdr (assoc :rhs body))
+                       (cdr (assoc :arg body))))
+         (arg (mochi--ast-to-maxima arg-node)))
     (case op-tag
-      (:*neg (list '(mtimes) -1 arg))
-      (:*pos arg)
+      ;; rumoca emits :*MINUS / :*PLUS for unary signs (matching the
+      ;; binary-op tag names).  :*NEG / :*POS are tolerated as aliases.
+      ((:*minus :*neg) (list '(mtimes) -1 arg))
+      ((:*plus  :*pos) arg)
+      (:*not (list '(mnot) arg))
       (otherwise
        (error "mochi: unsupported unary op ~S" op-tag)))))
 

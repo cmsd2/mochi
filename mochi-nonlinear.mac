@@ -1,0 +1,178 @@
+/* mochi-nonlinear — direct nonlinear simulation for mochi
+ *
+ * Provides:
+ *   mod_simulate_nonlinear — integrate the nonlinear DAE via SUNDIALS CVODE
+ *   mod_step_nonlinear, mod_impulse_nonlinear — convenience wrappers
+ *
+ * Requires mochi (mod_load) AND numerics-sundials (np_cvode) loaded first:
+ *
+ *   load("mochi")$
+ *   load("numerics-sundials")$
+ *   load("mochi-nonlinear")$
+ *
+ * The linear cousins live in mochi.mac:
+ *   mod_simulate / mod_step / mod_impulse  — ZOH discretisation of the
+ *   linearised state-space, fast and analytic but valid only near the
+ *   operating point.
+ *
+ * The nonlinear functions here integrate the *original* nonlinear DAE
+ * rumoca handed us — no operating-point assumption.
+ */
+
+if not fboundp('mod_load) then
+  error("mochi-nonlinear requires mochi.  Load it first: load(\"mochi\")$")$
+
+if not fboundp('np_cvode) then
+  error("mochi-nonlinear requires numerics-sundials.  Load it first:",
+        " load(\"numerics-sundials\")$")$
+
+/* mod__resolve_x0(states, x0)
+ *
+ * Accept either a flat list of initial values (in mod_get(m, 'states) order)
+ * or a list of equations `[state_sym = value, ...]` and return a flat
+ * list of floats.
+ */
+mod__resolve_x0(states, x0) := block(
+  [n : length(states), result],
+  if length(x0) # n then
+    error("mod_simulate_nonlinear: x0 has length ", length(x0),
+          " but model has ", n, " states ", states),
+  /* Detect equation form by inspecting the first element's operator.
+     Maxima's listp returns false for compound expressions like (theta = 0). */
+  if length(x0) > 0 and not atom(x0[1]) and op(x0[1]) = "=" then
+    /* equation form: [theta = 0, omega = 0] */
+    result : map(lambda([s], rhs(mod__assoc(s, x0))), states)
+  else
+    result : x0,
+  float(result))$
+
+/* mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts])
+ *
+ *   m      — model from mod_load
+ *   x0     — initial state vector (list of floats in `states' order, or
+ *            a list of equations [state = value, ...])
+ *   u_fn   — lambda([t], [u1, u2, ...]) returning the input vector
+ *   t_end  — end time
+ *   opts   — list of equations:
+ *              dt        — sample period (default t_end/500)
+ *              params    — parameter override list (default: .mo defaults)
+ *              method    — 'adams (default, non-stiff) or 'bdf (stiff)
+ *              rtol      — relative tolerance (default 1e-8)
+ *              atol      — absolute tolerance (default 1e-8)
+ *              return    — 'outputs (default) or 'states
+ *
+ * Returns `[t_list, y_list]`.  For SISO `y_list` is a flat list; for
+ * multi-output it's a list of length-|outputs| lists.  When 'return =
+ * 'states the trajectory is the full state vector at each sample.
+ */
+mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
+  [opts1, dt, params, method, rtol, atol, return_what,
+   states, inputs, outputs,
+   der_eqs, alg_eqs, output_eqs,
+   param_subst, der_exprs, output_exprs,
+   u_exprs, input_subst, rhs_exprs, vars_list,
+   x0_vec, n, ni, no, nt, t_list,
+   traj, k, x_k, u_k, x_sub, u_sub, full_sub, x_traj, y_traj, i],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  dt          : mod__opts_get(opts1, 'dt,     t_end / 500),
+  params      : mod__opts_get(opts1, 'params, []),
+  method      : mod__opts_get(opts1, 'method, 'adams),
+  rtol        : mod__opts_get(opts1, 'rtol,   1.0e-8),
+  atol        : mod__opts_get(opts1, 'atol,   1.0e-8),
+  return_what : mod__opts_get(opts1, 'return, 'outputs),
+
+  states  : mod_get(m, 'states),
+  inputs  : mod_get(m, 'inputs),
+  outputs : mod_get(m, 'outputs),
+  n  : length(states),
+  ni : length(inputs),
+  no : length(outputs),
+
+  /* Symbolic causalisation, then substitute parameters once. */
+  [der_eqs, alg_eqs, output_eqs] : mod__causalise(m),
+  param_subst : map(lambda([p], p[1] = p[2]), mod_get(m, 'params)),
+  if length(params) > 0 then
+    param_subst : append(params, param_subst),
+  der_exprs    : map(lambda([e], subst(param_subst, e[2])), der_eqs),
+  output_exprs : map(lambda([e], subst(param_subst, e[2])), output_eqs),
+
+  /* Use np_cvode's expression mode (compiles the RHS into native Lisp
+     closures — much faster than function mode).  Evaluate u_fn at the
+     symbolic time variable to get input expressions in t, then
+     substitute into the derivative expressions so the final RHS is a
+     list of expressions in [t, state1, state2, ...]. */
+  u_exprs : u_fn('t),
+  if not listp(u_exprs) or length(u_exprs) # ni then
+    error("mod_simulate_nonlinear: u_fn(t) must return a list of length ",
+          ni, " (one per input), got ", u_exprs),
+  input_subst : makelist(inputs[i] = u_exprs[i], i, 1, ni),
+  rhs_exprs   : map(lambda([e], subst(input_subst, e)), der_exprs),
+  vars_list   : append(['t], states),
+
+  x0_vec : mod__resolve_x0(states, x0),
+  nt     : floor(t_end / dt) + 1,
+  t_list : makelist(k * dt, k, 0, nt - 1),
+
+  /* Run the integrator.  traj is an ndarray [nt, 1+n]:
+     col 0 = time, cols 1..n = state values. */
+  traj : np_cvode(rhs_exprs, vars_list, x0_vec, t_list, rtol, atol, method),
+
+  /* Pull out the state trajectory and (if requested) compute outputs. */
+  x_traj : makelist(makelist(np_ref(traj, k, i),
+                             i, 1, n),
+                    k, 0, nt - 1),
+  if return_what = 'states then
+    return([t_list, x_traj]),
+
+  y_traj : makelist(block([t_k_ : t_list[k + 1],
+                           x_k_ : x_traj[k + 1],
+                           u_k_, x_sub_, u_sub_, full_sub_],
+                     u_k_   : u_fn(t_k_),
+                     x_sub_ : makelist(states[i] = x_k_[i], i, 1, n),
+                     u_sub_ : makelist(inputs[i] = u_k_[i], i, 1, ni),
+                     full_sub_ : append([t = t_k_], x_sub_, u_sub_),
+                     makelist(float(subst(full_sub_, output_exprs[i])),
+                              i, 1, no)),
+                    k, 0, nt - 1),
+
+  /* Flatten if SISO */
+  if no = 1 then y_traj : map(first, y_traj),
+  [t_list, y_traj])$
+
+/* mod_step_nonlinear(m, x0, t_end, [opts])
+ *
+ * Apply a step of magnitude `magnitude` (default 1) to input `input_index`
+ * (default 1) starting from state x0, with all other inputs held at zero.
+ * Same opts as mod_simulate_nonlinear plus 'input_index and 'magnitude.
+ */
+mod_step_nonlinear(m, x0, t_end, [opts]) := block(
+  [opts1, idx, mag, ni, u_fn],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  idx : mod__opts_get(opts1, 'input_index, 1),
+  mag : mod__opts_get(opts1, 'magnitude,   1),
+  ni  : length(mod_get(m, 'inputs)),
+  u_fn : buildq([idx_v : idx, ni_v : ni, mag_v : mag],
+                lambda([t], makelist(if i = idx_v then float(mag_v) else 0.0,
+                                     i, 1, ni_v))),
+  mod_simulate_nonlinear(m, x0, u_fn, t_end, opts1))$
+
+/* mod_impulse_nonlinear(m, x0, t_end, [opts])
+ *
+ * Discrete-impulse approximation: input `input_index' carries
+ * `magnitude/dt` for the first sample, zero thereafter.  Same opts as
+ * mod_simulate_nonlinear plus 'input_index and 'magnitude.
+ */
+mod_impulse_nonlinear(m, x0, t_end, [opts]) := block(
+  [opts1, dt, idx, mag, ni, u_fn],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  dt  : mod__opts_get(opts1, 'dt,           t_end / 500),
+  idx : mod__opts_get(opts1, 'input_index,  1),
+  mag : mod__opts_get(opts1, 'magnitude,    1),
+  ni  : length(mod_get(m, 'inputs)),
+  u_fn : buildq([idx_v : idx, ni_v : ni,
+                 spike_v : float(mag / dt), dt_v : dt],
+                lambda([t], makelist(if (i = idx_v and t < dt_v)
+                                       then spike_v
+                                       else 0.0,
+                                     i, 1, ni_v))),
+  mod_simulate_nonlinear(m, x0, u_fn, t_end, opts1))$

@@ -1,4 +1,4 @@
-This is mochi.info, produced by makeinfo version 7.1 from mochi.texi.
+This is mochi.info, produced by makeinfo version 7.3 from mochi.texi.
 
 
 File: mochi.info,  Node: Top,  Next: Package mochi,  Up: (dir)
@@ -20,6 +20,7 @@ File: mochi.info,  Node: Package mochi,  Next: Function and variable index,  Pre
 
 * Introduction to mochi::
 * Definitions for mochi::
+* Subsystem mochi-nonlinear::
 * Example::
 * Note mod_load does not touch session state::
 
@@ -42,7 +43,7 @@ To use the package:
 load("mochi");
 
 
-File: mochi.info,  Node: Definitions for mochi,  Next: Example,  Prev: Introduction to mochi,  Up: Package mochi
+File: mochi.info,  Node: Definitions for mochi,  Next: Subsystem mochi-nonlinear,  Prev: Introduction to mochi,  Up: Package mochi
 
 1.2 Definitions for mochi
 =========================
@@ -63,6 +64,7 @@ File: mochi.info,  Node: Definitions for mochi,  Next: Example,  Prev: Introduct
 * Function mod_transfer_function m op_point::
 * Function mod_transfer_function m op_point override_params::
 * Function mod_get m key::
+* Function mod__causalise m::
 * Function mod_dataflow m op_point [opts]::
 * Function mod_to_dot m op_point::
 * Function mod_to_dot m op_point override_params::
@@ -210,13 +212,38 @@ File: mochi.info,  Node: Function mod_transfer_function m op_point override_para
      file are substituted; with them, the supplied values are used.
 
 
-File: mochi.info,  Node: Function mod_get m key,  Next: Function mod_dataflow m op_point [opts],  Prev: Function mod_transfer_function m op_point override_params,  Up: Definitions for mochi
+File: mochi.info,  Node: Function mod_get m key,  Next: Function mod__causalise m,  Prev: Function mod_transfer_function m op_point override_params,  Up: Definitions for mochi
 
  -- Function: mod_get (M, KEY)
      Fetch one field from a model struct: ‘mod_get(m, 'params)’.
 
 
-File: mochi.info,  Node: Function mod_dataflow m op_point [opts],  Next: Function mod_to_dot m op_point,  Prev: Function mod_get m key,  Up: Definitions for mochi
+File: mochi.info,  Node: Function mod__causalise m,  Next: Function mod_dataflow m op_point [opts],  Prev: Function mod_get m key,  Up: Definitions for mochi
+
+ -- Function: mod__causalise (M)
+     Symbolic causalisation: solve the model's residual equations for
+     the derivative, algebraic, and output variables, returning explicit
+     equation lists.
+
+     [der_eqs, alg_eqs, output_eqs] = mod__causalise(m)
+
+     Each returned list has shape ‘[[lhs_sym, rhs_expr], ...]’ where the
+     RHS is a Maxima expression in the states, inputs, and parameters.
+     No parameter substitution and no operating-point substitution is
+     applied -- the result is purely symbolic.
+
+     Used directly by ‘mod_state_space’ for the linearisation Jacobians,
+     and by ‘mochi-nonlinear’ (https://github.com/cmsd2/mochi-nonlinear)
+     for direct integration of the nonlinear DAE without linearising
+     first.
+
+     Errors if the residuals can't be solved explicitly for the unknowns
+     -- that would mean a true implicit algebraic loop, which needs a
+     numeric solver inside the integration loop (lives in
+     ‘mochi-nonlinear’).
+
+
+File: mochi.info,  Node: Function mod_dataflow m op_point [opts],  Next: Function mod_to_dot m op_point,  Prev: Function mod__causalise m,  Up: Definitions for mochi
 
  -- Function: mod_dataflow (M, OP_POINT, [OPTS])
      Render the linearised state-space connectivity as a dataflow
@@ -295,9 +322,73 @@ File: mochi.info,  Node: Function mod_diagram m op_point [opts],  Prev: Function
           CLI itself depends on a headless Chrome via puppeteer.
 
 
-File: mochi.info,  Node: Example,  Next: Note mod_load does not touch session state,  Prev: Definitions for mochi,  Up: Package mochi
+File: mochi.info,  Node: Subsystem mochi-nonlinear,  Next: Example,  Prev: Definitions for mochi,  Up: Package mochi
 
-1.3 Example
+1.3 Subsystem: mochi-nonlinear
+==============================
+
+Direct nonlinear simulation of the original DAE -- no linearisation, no
+operating-point assumption.  Lives in ‘mochi-nonlinear.mac’ and is
+loaded on demand:
+
+load("mochi");
+load("numerics-sundials");      /* hard dep — provides np_cvode */
+load("mochi-nonlinear");
+
+The hard dep on ‘numerics-sundials’
+(https://github.com/cmsd2/numerics-sundials) is why this is a separate
+file rather than auto-loaded with mochi: users doing pure linear
+analysis don't need SUNDIALS installed.
+
+* Menu:
+
+* Function mod_simulate_nonlinear m x0 u_fn t_end [opts]::
+* Function mod_step_nonlinear m x0 t_end [opts]::
+* Function mod_impulse_nonlinear m x0 t_end [opts]::
+
+
+File: mochi.info,  Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts],  Next: Function mod_step_nonlinear m x0 t_end [opts],  Up: Subsystem mochi-nonlinear
+
+ -- Function: mod_simulate_nonlinear (M, X0, U_FN, T_END, [OPTS])
+     Integrate the model's nonlinear DAE via SUNDIALS CVODE.
+
+        • ‘x0’ -- initial state vector.  Either a flat list of floats in
+          the order given by ‘mod_get(m, 'states)’, or a list of
+          equations ‘[state_sym = value, ...]’.
+        • ‘u_fn’ -- ‘lambda([t], [u1, u2, ...])’ returning the input
+          vector.
+        • ‘t_end’ -- end time.
+        • ‘opts’ -- list of equations:
+             • ‘dt’ -- sample period (default ‘t_end/500’).
+             • ‘params’ -- parameter override list (default: ‘.mo’
+               defaults).
+             • ‘method’ -- ‘'adams’ (default, non-stiff) or ‘'bdf’
+               (stiff systems).
+             • ‘rtol’ -- relative tolerance (default ‘1e-8’).
+             • ‘atol’ -- absolute tolerance (default ‘1e-8’).
+             • ‘return’ -- ‘'outputs’ (default) or ‘'states’ to get the
+               full state trajectory instead of the output trajectory.
+
+     Returns ‘[t_list, y_list]’.  For SISO ‘y_list’ is a flat list; for
+     multi-output it's a list of length-‘|outputs|’ lists.
+
+
+File: mochi.info,  Node: Function mod_step_nonlinear m x0 t_end [opts],  Next: Function mod_impulse_nonlinear m x0 t_end [opts],  Prev: Function mod_simulate_nonlinear m x0 u_fn t_end [opts],  Up: Subsystem mochi-nonlinear
+
+ -- Function: mod_step_nonlinear (M, X0, T_END, [OPTS])
+
+
+File: mochi.info,  Node: Function mod_impulse_nonlinear m x0 t_end [opts],  Prev: Function mod_step_nonlinear m x0 t_end [opts],  Up: Subsystem mochi-nonlinear
+
+ -- Function: mod_impulse_nonlinear (M, X0, T_END, [OPTS])
+     Convenience wrappers over ‘mod_simulate_nonlinear’ mirroring the
+     linear ‘mod_step’ / ‘mod_impulse’.  Same opts plus ‘'input_index’
+     and ‘'magnitude’.
+
+
+File: mochi.info,  Node: Example,  Next: Note mod_load does not touch session state,  Prev: Subsystem mochi-nonlinear,  Up: Package mochi
+
+1.4 Example
 ===========
 
 load("mochi");
@@ -321,10 +412,17 @@ SS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 /* Render a dataflow diagram inline */
 mod_diagram(m, [iL = 0, vC = 0, Vin = 0]);
 
+/* Direct nonlinear simulation (opt-in subsystem; needs numerics-sundials) */
+load("numerics-sundials");
+load("mochi-nonlinear");
+m_pend : mod_load("examples/Pendulum.mo");
+[t, theta] : mod_step_nonlinear(m_pend, [0.0, 0.0], 4.0,
+                                 ['magnitude = 5]);
+
 
 File: mochi.info,  Node: Note mod_load does not touch session state,  Prev: Example,  Up: Package mochi
 
-1.4 Note: ‘mod_load’ does not touch session state
+1.5 Note: ‘mod_load’ does not touch session state
 =================================================
 
 ‘mod_load’ runs in Common Lisp (‘mochi-loader.lisp’) and constructs the
@@ -344,6 +442,8 @@ Appendix A Function and variable index
  [index ]
 * Menu:
 
+* mod__causalise:                        Function mod__causalise m.
+                                                                (line 3)
 * mod_cascade:                           Function mod_cascade SS1 SS2.
                                                                 (line 3)
 * mod_dataflow:                          Function mod_dataflow m op_point [opts].
@@ -354,12 +454,16 @@ Appendix A Function and variable index
                                                                 (line 3)
 * mod_impulse:                           Function mod_impulse m op_point t_end [opts].
                                                                 (line 3)
+* mod_impulse_nonlinear:                 Function mod_impulse_nonlinear m x0 t_end [opts].
+                                                                (line 3)
 * mod_load:                              Function mod_load path.
                                                                 (line 3)
 * mod_parallel:                          Function mod_parallel SS1 SS2.
                                                                 (line 3)
 * mod_print:                             Function mod_print m.  (line 3)
 * mod_simulate:                          Function mod_simulate m op_point u_fn t_end [opts].
+                                                                (line 3)
+* mod_simulate_nonlinear:                Function mod_simulate_nonlinear m x0 u_fn t_end [opts].
                                                                 (line 3)
 * mod_state_space:                       Function mod_state_space m op_point.
                                                                 (line 3)
@@ -368,6 +472,8 @@ Appendix A Function and variable index
 * mod_state_space_symbolic:              Function mod_state_space_symbolic m op_point.
                                                                 (line 3)
 * mod_step:                              Function mod_step m op_point t_end [opts].
+                                                                (line 3)
+* mod_step_nonlinear:                    Function mod_step_nonlinear m x0 t_end [opts].
                                                                 (line 3)
 * mod_to_dot:                            Function mod_to_dot m op_point.
                                                                 (line 3)
@@ -384,61 +490,40 @@ Appendix A Function and variable index
 * mod_unity_feedback:                    Function mod_unity_feedback SS K.
                                                                 (line 3)
 
-
 
 Tag Table:
 Node: Top71
 Node: Package mochi174
-Ref: #package-mochi307
-Node: Introduction to mochi428
-Ref: #introduction-to-mochi581
-Node: Definitions for mochi1055
-Ref: #definitions-for-mochi1224
-Node: Function mod_load path2087
-Ref: #function-mod_load-path2225
-Node: Function mod_print m3044
-Ref: #function-mod_print-m3224
-Node: Function mod_state_space m op_point3259
-Ref: #function-mod_state_space-m-op_point3484
-Node: Function mod_state_space m op_point override_params3485
-Ref: #function-mod_state_space-m-op_point-override_params3751
-Node: Function mod_state_space_symbolic m op_point4254
-Ref: #function-mod_state_space_symbolic-m-op_point4527
-Node: Function mod_simulate m op_point u_fn t_end [opts]4872
-Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5144
-Node: Function mod_step m op_point t_end [opts]5669
-Ref: #function-mod_step-m-op_point-t_end-opts5931
-Node: Function mod_impulse m op_point t_end [opts]5932
-Ref: #function-mod_impulse-m-op_point-t_end-opts6175
-Node: Function mod_cascade SS1 SS26709
-Ref: #function-mod_cascade-ss1-ss26922
-Node: Function mod_parallel SS1 SS26923
-Ref: #function-mod_parallel-ss1-ss27125
-Node: Function mod_unity_feedback SS K7126
-Ref: #function-mod_unity_feedback-ss-k7344
-Node: Function mod_transfer_function m op_point7985
-Ref: #function-mod_transfer_function-m-op_point8240
-Node: Function mod_transfer_function m op_point override_params8241
-Ref: #function-mod_transfer_function-m-op_point-override_params8503
-Node: Function mod_get m key8825
-Ref: #function-mod_get-m-key9049
-Node: Function mod_dataflow m op_point [opts]9119
-Ref: #function-mod_dataflow-m-op_point-opts9334
-Node: Function mod_to_dot m op_point10295
-Ref: #function-mod_to_dot-m-op_point10524
-Node: Function mod_to_dot m op_point override_params10525
-Ref: #function-mod_to_dot-m-op_point-override_params10766
-Node: Function mod_to_mermaid m op_point10767
-Ref: #function-mod_to_mermaid-m-op_point11015
-Node: Function mod_to_mermaid m op_point override_params11016
-Ref: #function-mod_to_mermaid-m-op_point-override_params11273
-Node: Function mod_diagram m op_point [opts]11466
-Ref: #function-mod_diagram-m-op_point-opts11668
-Node: Example12984
-Ref: #example13146
-Node: Note mod_load does not touch session state13745
-Ref: #note-mod_load-does-not-touch-session-state13957
-Node: Function and variable index14413
+Node: Introduction to mochi458
+Node: Definitions for mochi1085
+Node: Function mod_load path2165
+Node: Function mod_print m3122
+Node: Function mod_state_space m op_point3337
+Node: Function mod_state_space m op_point override_params3563
+Node: Function mod_state_space_symbolic m op_point4332
+Node: Function mod_simulate m op_point u_fn t_end [opts]4950
+Node: Function mod_step m op_point t_end [opts]5747
+Node: Function mod_impulse m op_point t_end [opts]6010
+Node: Function mod_cascade SS1 SS26787
+Node: Function mod_parallel SS1 SS27001
+Node: Function mod_unity_feedback SS K7204
+Node: Function mod_transfer_function m op_point8063
+Node: Function mod_transfer_function m op_point override_params8319
+Node: Function mod_get m key8903
+Node: Function mod__causalise m9183
+Node: Function mod_dataflow m op_point [opts]10332
+Node: Function mod_to_dot m op_point11511
+Node: Function mod_to_dot m op_point override_params11741
+Node: Function mod_to_mermaid m op_point11983
+Node: Function mod_to_mermaid m op_point override_params12232
+Node: Function mod_diagram m op_point [opts]12682
+Node: Subsystem mochi-nonlinear14200
+Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]15044
+Node: Function mod_step_nonlinear m x0 t_end [opts]16452
+Node: Function mod_impulse_nonlinear m x0 t_end [opts]16735
+Node: Example17142
+Node: Note mod_load does not touch session state18190
+Node: Function and variable index18858
 
 End Tag Table
 

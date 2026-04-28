@@ -1,0 +1,94 @@
+/* Tests for the mochi-nonlinear subsystem.
+   Requires numerics-sundials (np_cvode) installed. */
+
+(load("mochi"), load("numerics-sundials"), load("mochi-nonlinear"), true);
+true;
+
+/* ---- Sanity: causalised RHS exists for our linear examples ---- */
+
+(m_rlc : mod_load("examples/RLCircuit.mo"), true);
+true;
+
+/* ---- mod_simulate_nonlinear vs mod_simulate on an LTI plant ----
+   For an LTI plant the nonlinear (CVODE) and linear (ZOH) trajectories
+   should agree to numerical precision. */
+
+([t_lin, y_lin] : mod_step(m_rlc, [iL = 0, vC = 0, Vin = 0], 5.0), true);
+true;
+
+([t_nl, y_nl] : mod_step_nonlinear(m_rlc, [0.0, 0.0], 5.0), true);
+true;
+
+length(y_nl);
+501;
+
+/* Sample-point agreement: max |y_lin - y_nl| should be <1e-6. */
+is(lmax(map(lambda([a, b], abs(a - b)), y_lin, y_nl)) < 1.0e-6);
+true;
+
+/* ---- Pendulum: genuinely nonlinear ----
+   With a torque step that drives the pendulum past the small-angle
+   regime, the linearised model (sin θ → θ) and the true nonlinear
+   model must visibly diverge. */
+
+(m_pend : mod_load("examples/Pendulum.mo"), true);
+true;
+
+mod_get(m_pend, 'states);
+[theta, omega];
+
+mod_get(m_pend, 'inputs);
+[tau];
+
+/* Initial-condition acceptance: equation form. */
+([t_eq, y_eq] : mod_simulate_nonlinear(m_pend, [theta = 0.1, omega = 0.0],
+                                        lambda([t], [0.0]),
+                                        2.0),
+ true);
+true;
+
+/* Initial-condition acceptance: flat list form (states order). */
+([t_fl, y_fl] : mod_simulate_nonlinear(m_pend, [0.1, 0.0],
+                                        lambda([t], [0.0]),
+                                        2.0),
+ true);
+true;
+
+/* Both forms must produce the same trajectory. */
+is(lmax(map(lambda([a, b], abs(a - b)), y_eq, y_fl)) < 1.0e-12);
+true;
+
+/* Big torque step → drives angle past π/4 where sin(θ) ≠ θ.
+   Compare to the linearised (mod_step) trajectory. */
+([t_lp, y_lp] : mod_step(m_pend, [theta = 0, omega = 0, tau = 0],
+                          4.0, ['magnitude = 5]),
+ true);
+true;
+
+([t_np, y_np] : mod_step_nonlinear(m_pend, [0.0, 0.0],
+                                    4.0, ['magnitude = 5]),
+ true);
+true;
+
+/* Small-angle regime (early time): the two must agree to ~1%. */
+is(abs(y_lp[63] - y_np[63]) < 0.05);
+true;
+
+/* Past the small-angle regime: the trajectories must diverge by at
+   least 0.1 rad (the whole point of running the true nonlinear
+   simulation). */
+is(lmax(map(lambda([a, b], abs(a - b)), y_lp, y_np)) > 0.1);
+true;
+
+/* ---- Return states instead of outputs ---- */
+
+([t_st, x_st] : mod_simulate_nonlinear(m_pend, [0.1, 0.0],
+                                        lambda([t], [0.0]),
+                                        1.0,
+                                        ['return = 'states]),
+ true);
+true;
+
+/* Each entry of x_st is a length-2 list [theta, omega]. */
+length(x_st[1]);
+2;

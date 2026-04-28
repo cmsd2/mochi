@@ -2,7 +2,7 @@
 
 Read Modelica models into Maxima symbolic equations.
 
-`mochi` is a thin Maxima frontend over [rumoca](https://github.com/CogniPilot/rumoca), a Rust-based Modelica compiler. (The name puns on the `.mo` file extension; the package itself is unaffiliated with the Modelica Association.) `rumoca` does the heavy lifting (parse, flatten, classify variables, emit a JSON DAE); a small Python helper translates the JSON to Maxima syntax; this package wraps the result in a struct and provides operations on top: pretty-printing, state-space linearisation around an operating point.
+`mochi` is a thin Maxima frontend over [rumoca](https://github.com/CogniPilot/rumoca), a Rust-based Modelica compiler. (The name puns on the `.mo` file extension; the package itself is unaffiliated with the Modelica Association.) `rumoca` does the heavy lifting (parse, flatten, classify variables, emit a JSON DAE); a small Common Lisp loader (`mochi-loader.lisp`) walks the AST and constructs Maxima symbols directly; this package wraps the result in a struct and provides operations on top: pretty-printing, state-space linearisation around an operating point, linear time-domain simulation, transfer functions, plant composition, dataflow diagram rendering. The opt-in `mochi-nonlinear` subsystem adds direct integration of the original nonlinear DAE via SUNDIALS CVODE.
 
 ## Status
 
@@ -14,6 +14,8 @@ Early prototype. Handles a *useful subset* of Modelica:
 - Declarations of parameters, state variables (with `der(...)`), inputs, outputs.
 - Continuous-time equations.
 - The standard Modelica builtins (`sin`, `cos`, `exp`, `sqrt`, `log`, ...).
+- **Linear analysis** (built in): state-space linearisation, transfer functions, step/impulse/arbitrary-input simulation of the linearised model, plant composition.
+- **Nonlinear simulation** (opt-in `mochi-nonlinear` subsystem): direct integration of the original nonlinear DAE via SUNDIALS CVODE — no linearisation, no operating-point assumption. Adams (non-stiff) and BDF (stiff) methods.
 
 Not yet supported: inheritance / `extends`, conditional declarations, discrete events, FMU export.
 
@@ -23,6 +25,10 @@ Not yet supported: inheritance / `extends`, conditional declarations, discrete e
 - [Aximar](https://github.com/cmsd2/aximar) for notebook usage
 - [rumoca](https://github.com/CogniPilot/rumoca) — `cargo install rumoca`
 - [Quicklisp](https://www.quicklisp.org/) (one-time: `mxpm setup quicklisp`); `cl-json` is auto-installed when the package loads.
+
+Optional, only for the `mochi-nonlinear` subsystem:
+
+- [`numerics-sundials`](https://github.com/cmsd2/numerics-sundials) — `mxpm install numerics-sundials`. Brings in SUNDIALS C bindings; needed only if you want to integrate the nonlinear DAE directly. Pure linear analysis (state-space, Bode, transfer fn, dataflow diagrams) doesn't need it.
 
 The `RUMOCA_BIN` environment variable can override the rumoca path; otherwise the loader looks in `$PATH` and `~/.cargo/bin`.
 
@@ -101,6 +107,39 @@ Renderer prerequisites:
   `npm install -g @mermaid-js/mermaid-cli`. The CLI itself depends on a
   headless Chrome via puppeteer.
 
+### Nonlinear simulation (opt-in)
+
+Everything above linearises around an operating point. To integrate the
+*original* nonlinear DAE — useful for closed-loop validation, or any
+plant where small-angle approximations don't hold — load the
+`mochi-nonlinear` subsystem:
+
+```maxima
+load("mochi")$
+load("numerics-sundials")$    /* hard dep — provides np_cvode */
+load("mochi-nonlinear")$
+
+m : mod_load("examples/Pendulum.mo")$
+
+/* Step torque, starting from upright (theta = 0).  No linearisation —
+   the integrator sees the actual sin(theta) gravity term. */
+[t, theta] : mod_step_nonlinear(m, [0.0, 0.0], 4.0,
+                                 ['magnitude = 5])$
+
+/* Compare to the linearised step: small angles agree, large angles diverge. */
+[t_lin, theta_lin] : mod_step(m, [theta = 0, omega = 0, tau = 0], 4.0,
+                               ['magnitude = 5])$
+
+/* Custom input lambda, BDF for stiff systems, etc. */
+[t, y] : mod_simulate_nonlinear(m, [theta = 0.1, omega = 0],
+                                 lambda([t], [sin(2*t)]),
+                                 10.0,
+                                 ['method = 'bdf, 'rtol = 1e-10])$
+```
+
+Same `[t_list, y_list]` return shape as the linear `mod_simulate`. See
+`doc/mochi.md` § *Subsystem: mochi-nonlinear* for the full option list.
+
 `mod_state_space` returns numeric matrices `A, B, C, D` such that the linearisation around the operating point is
 
     dx/dt = A·(x − x₀) + B·(u − u₀)
@@ -133,6 +172,8 @@ For the RLC example with default parameters:
 
 ## Examples
 
+### Models
+
 See `examples/`:
 
 - `RLCircuit.mo` — series RLC, two-state plant, single input/output.
@@ -140,13 +181,38 @@ See `examples/`:
 - `DoubleTank.mo` — cascaded tank levels, inflow in, lower-tank level out (single-model formulation).
 - `TwoTanks.mo` — same as DoubleTank but built from two `Tank` *instances* connected by direct equations. Demonstrates dotted-name flattening and algebraic-variable handling.
 - `RCFilter.mo` — RC low-pass filter using proper Modelica `connect(...)` syntax over an `ElectricalPin` connector class. Demonstrates flow/potential expansion and per-instance input detection.
+- `Pendulum.mo` — damped pendulum with `sin(theta)` gravity term — used by the nonlinear-simulation notebook.
+
+### Notebooks
+
+The `examples/notebooks/` directory has executable `.macnb` notebooks
+that walk through the workflow end-to-end. Rendered markdown copies
+(committed alongside the sources for in-browser reading) live in
+`docs/notebooks/`:
+
+- [`01_linear_analysis`](docs/notebooks/01_linear_analysis.md) — load a `.mo` file, linearise around an operating point, run step/impulse/transfer-function analysis on RLCircuit, DCMotor, and DoubleTank, then compose two RLCs in cascade.
+- [`02_multi_component`](docs/notebooks/02_multi_component.md) — multi-instance composition (TwoTanks via direct equations, RCFilter via `connect(...)`) and dataflow-diagram rendering with `mod_diagram`.
+- [`03_nonlinear`](docs/notebooks/03_nonlinear.md) — direct nonlinear simulation via the `mochi-nonlinear` subsystem, with the Pendulum showing where the linearised model and the true `sin(theta)` dynamics visibly diverge.
+
+To regenerate the markdown after editing a notebook:
+
+```
+make            # execute every notebook (writes outputs back into the .macnb)
+                # then render to docs/notebooks/*.md
+make render     # render only — assumes outputs are already in the .macnb
+make clean      # delete the rendered docs
+```
+
+(Requires [`uv`](https://docs.astral.sh/uv/) for the Python toolchain
+and `aximar-mcp` on `$PATH` — or override via `make AXIMAR_MCP=/path/to/aximar-mcp`.)
 
 ## Roadmap
 
 - [ ] Library / inheritance support (multi-file `.mo` projects via `--source-root`)
 - [ ] Connector models (electrical / mechanical / thermal connectors)
-- [ ] Direct simulation via `np_cvode` (skip the linearisation step)
-- [ ] Optionally drop the Python helper in favour of a pure-Maxima JSON parser
+- [x] Direct nonlinear simulation via `np_cvode` (`mochi-nonlinear` subsystem)
+- [ ] DAE simulation via SUNDIALS IDA for index-1 algebraic loops that can't be symbolically causalised
+- [ ] Discrete events / hybrid systems (`when`, `reinit`, ideal switches)
 - [ ] `mod_export_state_space(m, file)` to dump the symbolic SS form
 
 ## License

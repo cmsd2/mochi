@@ -107,6 +107,27 @@ substituted; with them, the supplied values are used.
 
 Fetch one field from a model struct: `mod_get(m, 'params)`.
 
+### Function: mod__causalise (m)
+
+Symbolic causalisation: solve the model's residual equations for the
+derivative, algebraic, and output variables, returning explicit equation
+lists.
+
+    [der_eqs, alg_eqs, output_eqs] = mod__causalise(m)
+
+Each returned list has shape `[[lhs_sym, rhs_expr], ...]` where the RHS is a
+Maxima expression in the states, inputs, and parameters. No parameter
+substitution and no operating-point substitution is applied — the result is
+purely symbolic.
+
+Used directly by `mod_state_space` for the linearisation Jacobians, and by
+[`mochi-nonlinear`](https://github.com/cmsd2/mochi-nonlinear) for direct
+integration of the nonlinear DAE without linearising first.
+
+Errors if the residuals can't be solved explicitly for the unknowns — that
+would mean a true implicit algebraic loop, which needs a numeric solver
+inside the integration loop (lives in `mochi-nonlinear`).
+
 ### Function: mod_dataflow (m, op_point, [opts])
 
 Render the linearised state-space connectivity as a dataflow diagram. Nonzero
@@ -162,6 +183,49 @@ Renderer prerequisites:
   `npm install -g @mermaid-js/mermaid-cli`. The CLI itself depends on a
   headless Chrome via puppeteer.
 
+## Subsystem: mochi-nonlinear
+
+Direct nonlinear simulation of the original DAE — no linearisation, no
+operating-point assumption. Lives in `mochi-nonlinear.mac` and is loaded
+on demand:
+
+```maxima
+load("mochi");
+load("numerics-sundials");      /* hard dep — provides np_cvode */
+load("mochi-nonlinear");
+```
+
+The hard dep on [`numerics-sundials`](https://github.com/cmsd2/numerics-sundials)
+is why this is a separate file rather than auto-loaded with mochi:
+users doing pure linear analysis don't need SUNDIALS installed.
+
+### Function: mod_simulate_nonlinear (m, x0, u_fn, t_end, [opts])
+
+Integrate the model's nonlinear DAE via SUNDIALS CVODE.
+
+- `x0` — initial state vector. Either a flat list of floats in the order
+  given by `mod_get(m, 'states)`, or a list of equations
+  `[state_sym = value, ...]`.
+- `u_fn` — `lambda([t], [u1, u2, ...])` returning the input vector.
+- `t_end` — end time.
+- `opts` — list of equations:
+  - `dt` — sample period (default `t_end/500`).
+  - `params` — parameter override list (default: `.mo` defaults).
+  - `method` — `'adams` (default, non-stiff) or `'bdf` (stiff systems).
+  - `rtol` — relative tolerance (default `1e-8`).
+  - `atol` — absolute tolerance (default `1e-8`).
+  - `return` — `'outputs` (default) or `'states` to get the full state
+    trajectory instead of the output trajectory.
+
+Returns `[t_list, y_list]`. For SISO `y_list` is a flat list; for
+multi-output it's a list of length-`|outputs|` lists.
+
+### Function: mod_step_nonlinear (m, x0, t_end, [opts])
+### Function: mod_impulse_nonlinear (m, x0, t_end, [opts])
+
+Convenience wrappers over `mod_simulate_nonlinear` mirroring the linear
+`mod_step` / `mod_impulse`. Same opts plus `'input_index` and `'magnitude`.
+
 ## Example
 
 ```maxima
@@ -185,6 +249,13 @@ SS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 
 /* Render a dataflow diagram inline */
 mod_diagram(m, [iL = 0, vC = 0, Vin = 0]);
+
+/* Direct nonlinear simulation (opt-in subsystem; needs numerics-sundials) */
+load("numerics-sundials");
+load("mochi-nonlinear");
+m_pend : mod_load("examples/Pendulum.mo");
+[t, theta] : mod_step_nonlinear(m_pend, [0.0, 0.0], 4.0,
+                                 ['magnitude = 5]);
 ```
 
 ## Note: `mod_load` does not touch session state
