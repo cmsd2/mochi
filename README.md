@@ -55,6 +55,22 @@ mod_print(m)$
 [A, B, C, D] : mod_state_space(m,
                                [iL = 0, vC = 0, Vin = 0],
                                [R = 2.0, L = 0.4, Ccap = 0.5])$
+
+/* Step / impulse / arbitrary-input simulation */
+[t, y_step] : mod_step(m, [iL = 0, vC = 0, Vin = 0], 5.0)$
+[t, y_imp]  : mod_impulse(m, [iL = 0, vC = 0, Vin = 0], 5.0)$
+[t, y]      : mod_simulate(m, [iL = 0, vC = 0, Vin = 0],
+                           lambda([t], [sin(2*t)]),  /* input vector */
+                           5.0)$
+
+/* Symbolic transfer function H(s) = C(sI - A)^{-1} B + D */
+H : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0])$
+
+/* Compose two plants */
+SS  : mod_state_space(m, [iL = 0, vC = 0, Vin = 0])$
+SS2 : mod_cascade(SS, SS)$            /* output of 1 → input of 2 */
+SS3 : mod_parallel(SS, SS)$           /* same input, sum outputs */
+SS4 : mod_unity_feedback(SS, 2.0)$    /* close loop with K = 2 */
 ```
 
 `mod_state_space` returns numeric matrices `A, B, C, D` such that the linearisation around the operating point is

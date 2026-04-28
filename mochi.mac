@@ -7,15 +7,28 @@
  * wraps everything in a struct.
  *
  * Public API:
- *   mod_load(path)              — parse a .mo file, return a model struct
- *   mod_print(m)                — pretty-print a model
- *   mod_state_space(m, op)      — linearise around an operating point
- *                                 op = [iL = 0, vC = 0, Vin = 0, ...]
- *                                 returns [A, B, C, D] (numeric, with
- *                                 parameters substituted to defaults)
- *   mod_state_space(m, op, params)
- *                               — like above, but pass an explicit
- *                                 parameter list [R = 2, L = 0.4, ...]
+ *
+ *   mod_load(path)                — parse a .mo file, return a model struct
+ *   mod_print(m)                  — pretty-print
+ *   mod_get(m, key)               — fetch a struct field
+ *
+ *   mod_state_space(m, op)        — linearise → numeric [A, B, C, D]
+ *   mod_state_space(m, op, params)  — with parameter overrides
+ *   mod_state_space_symbolic(m, op) — symbolic [A, B, C, D] (params
+ *                                     left as symbols)
+ *
+ *   mod_simulate(m, op, u_fn, t_end, [opts])
+ *                                 — generic input-driven simulation
+ *   mod_step(m, op, t_end, [opts])      — step on input `input_index` (default 1)
+ *   mod_impulse(m, op, t_end, [opts])   — discrete impulse approximation
+ *
+ *   mod_cascade(SS1, SS2)         — output of 1 → input of 2
+ *   mod_parallel(SS1, SS2)        — same input, sum outputs
+ *   mod_unity_feedback(SS, K)     — close negative loop with gain K
+ *
+ *   mod_transfer_function(m, op)         — H(s) with parameters
+ *                                          substituted to defaults
+ *   mod_transfer_function(m, op, params) — with parameter overrides
  *
  * A model struct is a list of [tag, value] pairs:
  *   [['name = ..., 'params = ..., 'states = ..., 'derivs = ...,
@@ -29,6 +42,9 @@
  * substituting their value into the model.  As a side effect, mod_load() will
  * erase any pre-existing global binding of those names.
  */
+
+/* mochi depends on the numerics package (ndarray, np_expm, np_matmul, ...) */
+load("numerics")$
 
 /* ---- Locate the helper script -------------------------------------- */
 
@@ -124,31 +140,25 @@ mod_print(m) := block([],
  * if omitted, the default values from the .mo file are used.
  */
 
-mod_state_space(m, op_point, [override_params]) := block(
-  [params, states, derivs, inputs, outputs, residuals,
-   solved, f_expr, y_expr, A, B, C, D, n, ni, no, i, j,
-   param_subst, op_subst, full_subst],
+/* Internal: build A, B, C, D as symbolic Maxima matrices, with all
+   parameters and state/input symbols left as symbols (no substitution). */
+mod__symbolic_ss(m) := block(
+  [states, derivs, inputs, outputs, residuals,
+   solved, f_expr, y_expr, A, B, C, D, n, ni, no],
   states    : mod_get(m, 'states),
   derivs    : mod_get(m, 'derivs),
   inputs    : mod_get(m, 'inputs),
   outputs   : mod_get(m, 'outputs),
   residuals : mod_get(m, 'residuals),
-  /* Build parameter substitution list */
-  params : mod_get(m, 'params),
-  param_subst : map(lambda([p], p[1] = p[2]), params),
-  if length(override_params) > 0 then
-    param_subst : append(override_params[1], param_subst),
-  /* Solve residuals (= 0) for derivs and outputs. Each residual equation
-     is a Maxima expression; treat as residual = 0 and solve. */
+  /* Solve residuals (= 0) for derivs and outputs. Each residual is an
+     expression; we wrap as `expr = 0` and solve symbolically. */
   solved : solve(map(lambda([r], r = 0), residuals),
                  append(derivs, outputs)),
   if solved = [] then
-    error("mod_state_space: could not solve residuals for derivs+outputs"),
-  /* Extract f and g from the first solution branch */
+    error("mod__symbolic_ss: could not solve residuals for derivs+outputs"),
   solved : solved[1],
   f_expr : map(lambda([d], rhs(mod__assoc(d, solved))), derivs),
   y_expr : map(lambda([y], rhs(mod__assoc(y, solved))), outputs),
-  /* Jacobians */
   n  : length(states),
   ni : length(inputs),
   no : length(outputs),
@@ -162,14 +172,221 @@ mod_state_space(m, op_point, [override_params]) := block(
   D : if (no > 0 and ni > 0)
         then genmatrix(lambda([i, j], diff(y_expr[i], inputs[j])), no, ni)
       else zeromatrix(no, ni),
-  /* Substitute parameters and operating point */
-  op_subst : op_point,
-  full_subst : append(param_subst, op_subst),
+  [A, B, C, D])$
+
+/* Symbolic state-space, with the operating point substituted but
+   parameters left as symbols.
+     mod_state_space_symbolic(m, op)
+   For nonlinear plants, the Jacobian depends on the operating point;
+   for LTI plants, the substitution is a no-op. */
+mod_state_space_symbolic(m, op_point) := block(
+  [A, B, C, D],
+  [A, B, C, D] : mod__symbolic_ss(m),
+  [subst(op_point, A),
+   subst(op_point, B),
+   subst(op_point, C),
+   subst(op_point, D)])$
+
+/* Numeric state-space.
+     mod_state_space(m, op_point)            — use default parameters
+     mod_state_space(m, op_point, params)    — override parameters
+   Returns A, B, C, D as Maxima matrices of floats. */
+mod_state_space(m, op_point, [override_params]) := block(
+  [A, B, C, D, params, param_subst, op_subst, full_subst],
+  [A, B, C, D] : mod__symbolic_ss(m),
+  params : mod_get(m, 'params),
+  param_subst : map(lambda([p], p[1] = p[2]), params),
+  if length(override_params) > 0 then
+    param_subst : append(override_params[1], param_subst),
+  full_subst : append(param_subst, op_point),
   A : float(subst(full_subst, A)),
   B : float(subst(full_subst, B)),
   C : float(subst(full_subst, C)),
   D : float(subst(full_subst, D)),
   [A, B, C, D])$
+
+/* ---- Simulation: mod_simulate, mod_step, mod_impulse ------------- */
+/*
+ * mod_simulate(m, op_point, u_fn, t_end, [opts])
+ *   Simulates the linearised model from zero state with input given by
+ *   u_fn(t).  u_fn must return a list of length |inputs|.  Returns
+ *   [t_list, y_list].  For SISO models y_list is a flat list; for
+ *   multi-output models it is a list of length-|outputs| lists.
+ *
+ * mod_step(m, op_point, t_end, [opts])
+ *   Step on the first input (or `input_index` from opts).  Other inputs
+ *   held at zero.
+ *
+ * mod_impulse(m, op_point, t_end, [opts])
+ *   Discrete impulse approximation: u[0] = 1/dt on the chosen input,
+ *   zero thereafter.  ∫u dt = 1, matching a continuous Dirac.
+ *
+ * opts is an optional list of equations.  Recognised keys:
+ *     dt           — sample period (default t_end/500)
+ *     params       — parameter override list (default: defaults from .mo)
+ *     input_index  — 1-based input to step/impulse (default 1)
+ *     magnitude    — magnitude of the step or impulse (default 1)
+ */
+
+mod__opts_get(opts, key, default_val) := block([e, found],
+  found : 'unset,
+  for e in opts do
+    if found = 'unset and lhs(e) = key then found : rhs(e),
+  if found = 'unset then default_val else found)$
+
+/* Discretise a continuous (A, B) pair to (Ad, Bd) over a sample period dt
+   using zero-order hold.  Uses the augmented matrix-exponential trick so
+   it works for *singular* A (e.g. plants with an integrator):
+       M = [[A, B], [0, 0]],   eM = expm(M·dt)
+       Ad = eM[0:n, 0:n],      Bd = eM[0:n, n:n+m].
+*/
+mod__zoh_discretise(A_, B_, dt) := block(
+  [n, m, A_nd, B_nd, M_aug, eM, Ad, Bd, i, j],
+  /* Size from the Maxima matrix shape — np_shape on ndarray-of-matrix is
+     less reliable here (column vectors sometimes degrade to 1D). */
+  n : length(A_),
+  m : length(transpose(B_)),
+  A_nd : ndarray(float(A_)),
+  B_nd : ndarray(float(B_)),
+  M_aug : np_vstack(np_hstack(A_nd, B_nd), np_zeros([m, n + m])),
+  eM : np_expm(np_scale(dt, M_aug)),
+  Ad : np_zeros([n, n]),
+  Bd : np_zeros([n, m]),
+  for i : 0 thru n - 1 do (
+    for j : 0 thru n - 1 do np_set(Ad, i, j, np_ref(eM, i, j)),
+    for j : 0 thru m - 1 do np_set(Bd, i, j, np_ref(eM, i, n + j))),
+  [Ad, Bd])$
+
+mod_simulate(m, op_point, u_fn, t_end, [opts]) := block(
+  [params, dt, A, B, C, D, A_nd, B_nd, C_nd, D_nd, Ad, Bd,
+   nt, t_list, y_list, x, k, t, u, u_nd, y_vec, no],
+  if length(opts) >= 1 then opts : opts[1] else opts : [],
+  params : mod__opts_get(opts, 'params, []),
+  dt     : mod__opts_get(opts, 'dt, t_end / 500),
+  [A, B, C, D] : mod_state_space(m, op_point, params),
+  C_nd : ndarray(float(C)),
+  D_nd : ndarray(float(D)),
+  no : length(C),
+  [Ad, Bd] : mod__zoh_discretise(A, B, dt),
+  nt : floor(t_end / dt) + 1,
+  t_list : makelist(k * dt, k, 0, nt - 1),
+  x : np_zeros([length(A), 1]),
+  y_list : [],
+  for k : 0 thru nt - 1 do block([t_k, u_k, u_nd_k, yvec],
+    t_k : k * dt,
+    u_k : u_fn(t_k),
+    u_nd_k : ndarray(transpose(matrix(u_k))),
+    yvec : np_add(np_matmul(C_nd, x), np_matmul(D_nd, u_nd_k)),
+    /* Collect the output column as a list */
+    y_list : endcons(makelist(np_ref(yvec, i, 0), i, 0, no - 1), y_list),
+    x : np_add(np_matmul(Ad, x), np_matmul(Bd, u_nd_k))),
+  /* Flatten if SISO */
+  if no = 1 then y_list : map(first, y_list),
+  [t_list, y_list])$
+
+mod_step(m, op_point, t_end, [opts]) := block(
+  [opts1, idx, mag, ni, u_fn],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  idx : mod__opts_get(opts1, 'input_index, 1),
+  mag : mod__opts_get(opts1, 'magnitude, 1),
+  ni  : length(mod_get(m, 'inputs)),
+  /* buildq splices the locals into the lambda body as literals so the
+     closure is safe across mod_simulate's own scope. */
+  u_fn : buildq([idx_v: idx, ni_v: ni, mag_v: mag],
+                lambda([t], makelist(if i = idx_v then mag_v else 0.0,
+                                     i, 1, ni_v))),
+  mod_simulate(m, op_point, u_fn, t_end, opts1))$
+
+mod_impulse(m, op_point, t_end, [opts]) := block(
+  [opts1, idx, mag, ni, dt_use, u_fn, fresh_opts],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  idx     : mod__opts_get(opts1, 'input_index, 1),
+  mag     : mod__opts_get(opts1, 'magnitude, 1),
+  dt_use  : mod__opts_get(opts1, 'dt, t_end / 500),
+  ni      : length(mod_get(m, 'inputs)),
+  /* Discrete impulse: u[0] ≈ mag/dt on chosen input, zero after.
+     Capture dt_use into the lambda by buildq so it's a literal. */
+  u_fn : buildq([idx_v: idx, ni_v: ni, mag_v: mag, dt_v: dt_use],
+                lambda([t], makelist(if (i = idx_v and t < dt_v/2)
+                                       then mag_v/dt_v
+                                       else 0.0,
+                                     i, 1, ni_v))),
+  fresh_opts : append(opts1, ['dt = dt_use]),
+  mod_simulate(m, op_point, u_fn, t_end, fresh_opts))$
+
+/* ---- Interconnection: cascade, parallel, unity feedback --------- */
+/*
+ * Each takes one or two state-space tuples [A, B, C, D] (Maxima matrices)
+ * and returns the connected tuple, ready for further composition.
+ *
+ *   mod_cascade(SS1, SS2)     — output of 1 → input of 2 (SISO/MIMO with
+ *                                matching dimensions)
+ *   mod_parallel(SS1, SS2)    — same input to both, sum outputs
+ *   mod_unity_feedback(SS, K) — close negative loop with gain K (scalar)
+ */
+
+mod_cascade(SS1, SS2) := block(
+  [A1, B1, C1, D1, A2, B2, C2, D2, n1, n2, Z, A_, B_, C_, D_],
+  [A1, B1, C1, D1] : SS1,
+  [A2, B2, C2, D2] : SS2,
+  n1 : length(args(A1)),  n2 : length(args(A2)),
+  Z  : zeromatrix(n1, n2),
+  A_ : addrow(addcol(A1, Z),
+              addcol(B2 . C1, A2)),
+  B_ : addrow(B1, B2 . D1),
+  C_ : addcol(D2 . C1, C2),
+  D_ : D2 . D1,
+  [A_, B_, C_, D_])$
+
+mod_parallel(SS1, SS2) := block(
+  [A1, B1, C1, D1, A2, B2, C2, D2, n1, n2, Z12, Z21, A_, B_, C_, D_],
+  [A1, B1, C1, D1] : SS1,
+  [A2, B2, C2, D2] : SS2,
+  n1 : length(args(A1)),  n2 : length(args(A2)),
+  Z12 : zeromatrix(n1, n2),
+  Z21 : zeromatrix(n2, n1),
+  A_ : addrow(addcol(A1, Z12), addcol(Z21, A2)),
+  B_ : addrow(B1, B2),
+  C_ : addcol(C1, C2),
+  D_ : D1 + D2,
+  [A_, B_, C_, D_])$
+
+mod_unity_feedback(SS, K) := block(
+  [A, B, C, D, Acl, Bcl, Ccl, Dcl],
+  [A, B, C, D] : SS,
+  /* Negative feedback with gain K assuming D = 0 (typical):
+        u = K (r - y) = K r - K C x
+        ẋ = (A - K B C) x + K B r */
+  Acl : A - K * B . C,
+  Bcl : K * B,
+  Ccl : C,
+  Dcl : D,
+  [Acl, Bcl, Ccl, Dcl])$
+
+/* ---- Transfer function ----------------------------------------- */
+/*
+ * mod_transfer_function(m, op_point)            — symbolic in parameters
+ * mod_transfer_function(m, op_point, params)    — substituted to numeric
+ *
+ * Returns H(s) = C(sI - A)^{-1} B + D as a Maxima expression (scalar
+ * for SISO, matrix for MIMO).  The Laplace variable is `s`.
+ */
+mod_transfer_function(m, op_point, [override_params]) := block(
+  [A, B, C, D, n, sI_A, H, params, full_subst],
+  if length(override_params) > 0 then (
+    [A, B, C, D] : mod_state_space(m, op_point, override_params[1]),
+    H : ratsimp(C . invert(s * ident(length(args(A))) - A) . B + D)
+  ) else (
+    [A, B, C, D] : mod_state_space_symbolic(m, op_point),
+    /* Substitute parameter defaults so the result is a clean expression
+       in s alone — same result as the numeric overload but with units. */
+    params : mod_get(m, 'params),
+    full_subst : map(lambda([p], p[1] = p[2]), params),
+    n : length(args(A)),
+    H : C . invert(s * ident(n) - A) . B + D,
+    H : ratsimp(subst(full_subst, H))
+  ),
+  H)$
 
 /* ---- 'mod__assoc' helper for solve() output --------------------- */
 /* solve() returns equations like der_iL = expr; mod__assoc finds the

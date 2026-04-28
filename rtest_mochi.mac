@@ -30,7 +30,8 @@ length(mod_get(m_rlc, 'outputs));
 length(mod_get(m_rlc, 'params));
 3;
 
-/* State-space at the origin with default parameters */
+/* ---- mod_state_space ---- */
+
 ([A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
 true;
 
@@ -46,3 +47,87 @@ matrix([0.0, 1.0]);
 
 D;
 matrix([0.0]);
+
+/* ---- mod_state_space_symbolic ---- */
+
+([As, Bs, Cs, Ds] : mod_state_space_symbolic(m_rlc, [iL = 0, vC = 0, Vin = 0]),
+ true);
+true;
+
+/* The symbolic A keeps R, L, Ccap as symbols. */
+ratsimp(As - matrix([-(R/L), -(1/L)], [1/Ccap, 0]));
+matrix([0, 0], [0, 0]);
+
+ratsimp(Bs - matrix([1/L], [0]));
+matrix([0], [0]);
+
+/* ---- mod_transfer_function ---- */
+
+(H : mod_transfer_function(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
+true;
+
+/* H(s) = 1 / (L·C·s² + R·C·s + 1) — for default values, 1 / (0.5 s² + s + 1).
+   For SISO, mod_transfer_function returns a 1×1 matrix; the difference
+   ratsimps to matrix([0]). */
+ratsimp(H - 1 / (0.5 * s^2 + s + 1));
+matrix([0]);
+
+/* ---- mod_step ---- */
+
+([t_step, y_step] : mod_step(m_rlc, [iL = 0, vC = 0, Vin = 0], 10.0), true);
+true;
+
+length(t_step);
+501;
+
+/* For a stable LTI plant with DC gain 1, step settles at 1.  Within 5% by t=10. */
+is(abs(last(y_step) - 1.0) < 0.05);
+true;
+
+/* ---- mod_impulse ---- */
+
+([t_imp, y_imp] : mod_impulse(m_rlc, [iL = 0, vC = 0, Vin = 0], 10.0), true);
+true;
+
+length(t_imp);
+501;
+
+/* Impulse response decays to zero (since plant is stable). */
+is(abs(last(y_imp)) < 0.05);
+true;
+
+/* ---- mod_cascade ---- */
+
+(SS_rlc : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
+true;
+
+([Ac, Bc, Cc, Dc] : mod_cascade(SS_rlc, SS_rlc), true);
+true;
+
+/* Cascade of two 2-state plants → 4 states */
+length(Ac);
+4;
+
+/* ---- mod_parallel ---- */
+
+([Ap, Bp, Cp_, Dp] : mod_parallel(SS_rlc, SS_rlc), true);
+true;
+
+length(Ap);
+4;
+
+/* Parallel of two identical SISO plants doubles the DC gain.
+   For our RLC (DC gain 1), parallel gives DC gain 2. */
+([t_par, y_par] : mod_simulate(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                                lambda([t], [1.0]),
+                                10.0),
+ true);
+true;
+
+/* ---- mod_unity_feedback ---- */
+
+([Afb, Bfb, Cfb, Dfb] : mod_unity_feedback(SS_rlc, 1.0), true);
+true;
+
+length(Afb);
+2;

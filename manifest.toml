@@ -8,5 +8,8 @@ doc = "doc/mochi.md"
 repository = "https://github.com/cmsd2/mochi"
 keywords = ["modelica", "control-systems", "state-space", "rumoca", "dae"]
 
+[dependencies]
+numerics = ">= 0.1.0"
+
 [test]
 files = ["rtest_mochi.mac"]
