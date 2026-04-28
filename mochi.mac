@@ -22,6 +22,12 @@
  *     'inputs = ..., 'outputs = ..., 'initial = ..., 'residuals = ...]]
  *
  * Use mod_get(m, 'states) to fetch a field.
+ *
+ * Caveat: mod_load() emits a kill(...) of every parameter, state, derivative,
+ * input, and output symbol before binding them.  This prevents user variables
+ * in the session that share a name with a model parameter (e.g. `A2`) from
+ * substituting their value into the model.  As a side effect, mod_load() will
+ * erase any pre-existing global binding of those names.
  */
 
 /* ---- Locate the helper script -------------------------------------- */

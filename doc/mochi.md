@@ -60,3 +60,22 @@ mod_print(m);
 
 [A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 ```
+
+## Caveat: `mod_load` calls `kill(...)` on every model symbol
+
+When `mod_load` reads a `.mo` file, the helper script emits a Maxima file that
+**unconditionally `kill`s every parameter, state, derivative, input, and output
+name** before binding them. That ensures user variables from the surrounding
+session don't accidentally substitute into the model's parameters or
+residuals.
+
+For example: the `DoubleTank.mo` example has a parameter named `A2`. If a user
+had earlier in their session bound `A2` to a matrix (say from `[A, B, C, D] :
+mod_state_space(...)` followed by `A2 : ...`), then loading the model would
+otherwise pick up that matrix value instead of treating `A2` as a fresh
+symbol. The `kill` call resets it.
+
+Practical consequence: **calling `mod_load` will erase any global bindings
+of the model's parameter, state, and I/O symbols**. If you need to preserve a
+session value, save it to a different name first, or use a `block(...)` to
+scope the model load.

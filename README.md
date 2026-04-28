@@ -79,12 +79,18 @@ For the RLC example with default parameters:
                        (walks JSON AST, emits Maxima syntax)
                                     │
                                     ▼
-                              modelica.mac
+                              mochi.mac
                        (loads the emitted file,
                         computes Jacobians, etc.)
 ```
 
-The Python helper is invoked from Maxima via a `system()` call to a temp file; the result is `batch`-loaded back into Maxima.
+The Python helper is invoked from Maxima via a `system()` call to a temp file; the result is `load()`-ed back into Maxima.
+
+## Caveat: `mod_load` calls `kill(...)` on every model symbol
+
+The Python helper's emitted `.mac` file starts with a `kill(...)` over every parameter, state, derivative, input, and output name in the model. This guarantees those symbols are *fresh* before they get bound — so a user variable in the session that happens to share a name with a model parameter (e.g. `A2` for `DoubleTank`'s second-tank area) doesn't substitute its value into the model.
+
+Practical consequence: **`mod_load` will erase any existing bindings of the model's parameter, state, or I/O symbols**. Save anything you care about under a different name first, or scope the load inside `block(...)`.
 
 ## Examples
 
