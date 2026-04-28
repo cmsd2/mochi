@@ -107,6 +107,61 @@ substituted; with them, the supplied values are used.
 
 Fetch one field from a model struct: `mod_get(m, 'params)`.
 
+### Function: mod_dataflow (m, op_point, [opts])
+
+Render the linearised state-space connectivity as a dataflow diagram. Nonzero
+entries of `A`, `B`, `C`, `D` become labelled edges:
+
+    B[i,j] ≠ 0   →   input[j]  ──>  state[i]   (label: B[i,j])
+    A[i,j] ≠ 0   →   state[j]  ──>  state[i]   (label: A[i,j])
+    C[k,i] ≠ 0   →   state[i]  ──>  output[k]  (label: C[k,i])
+    D[k,j] ≠ 0   →   input[j]  ──>  output[k]  (label: D[k,j])
+
+`opts` is an optional list of equations:
+
+- `format` — `'dot` (GraphViz, default), `'mermaid`, or `'edges` (raw list).
+- `threshold` — hide edges with `|weight| < threshold` (default `1e-12`).
+- `params` — parameter override list, passed to `mod_state_space`.
+
+Returns a Maxima string for `'dot` / `'mermaid`, or the raw edge list
+`[[from, to, weight], ...]` for `'edges`.
+
+### Function: mod_to_dot (m, op_point)
+### Function: mod_to_dot (m, op_point, override_params)
+### Function: mod_to_mermaid (m, op_point)
+### Function: mod_to_mermaid (m, op_point, override_params)
+
+Thin wrappers over `mod_dataflow` that pin the format. Return the diagram
+source as a Maxima string, suitable for embedding in markdown / piping into
+an external renderer.
+
+### Function: mod_diagram (m, op_point, [opts])
+
+One-shot front-end: build a diagram of the model and render it inline. Shells
+out to the chosen renderer to write an SVG into Maxima's temp directory and
+prints the path so the maxima-extension / Aximar notebook UI picks it up and
+embeds the SVG content as `image/svg+xml` in the cell output (the notebook is
+self-contained — the temp file is read once at evaluation time and is no
+longer needed).
+
+Returns the SVG file path as a string.
+
+`opts` is an optional list of equations:
+
+- `diagram` — only `'dataflow` is supported right now (default).
+- `renderer` — `'dot` (GraphViz, default) or `'mermaid` (Mermaid CLI).
+  `'graphviz` is accepted as an alias for `'dot`.
+- `threshold`, `params` — passed through to `mod_dataflow` /
+  `mod_state_space`.
+
+Renderer prerequisites:
+
+- `'dot` — GraphViz `dot` on `$PATH` (or set the `DOT_BIN` environment
+  variable). `brew install graphviz` on macOS.
+- `'mermaid` — Mermaid CLI `mmdc` on `$PATH` (or set `MMDC_BIN`):
+  `npm install -g @mermaid-js/mermaid-cli`. The CLI itself depends on a
+  headless Chrome via puppeteer.
+
 ## Example
 
 ```maxima
@@ -127,6 +182,9 @@ H : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);
 /* Compose a cascade of two RLCs */
 SS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 [A2, B2, C2, D2] : mod_cascade(SS, SS);
+
+/* Render a dataflow diagram inline */
+mod_diagram(m, [iL = 0, vC = 0, Vin = 0]);
 ```
 
 ## Note: `mod_load` does not touch session state

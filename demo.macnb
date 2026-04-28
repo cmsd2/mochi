@@ -521,7 +521,7 @@
     },
     {
       "cell_type": "markdown",
-      "source": "## 7. Dataflow diagrams\n\n`mod_diagram(m, op)` is the one-shot front-end: it builds the linearised dataflow graph and renders an SVG inline. Inputs (blue) on the left, states (red) in the middle with self-loops for diagonal A entries, outputs (green) on the right. Edge labels are the matrix entries.\n\nThe `'renderer` option picks the engine: `'dot` (GraphViz, default) or `'mermaid` (Mermaid CLI). For raw text output use `mod_to_mermaid`, `mod_to_dot`, or `mod_dataflow(m, op, ['format = 'edges])` for the raw `[from, to, weight]` list.",
+      "source": "## 7. Dataflow diagrams\n\n`mod_diagram(m, op)` builds the linearised dataflow graph and renders an SVG inline. Inputs (blue) on the left, states (red) in the middle with self-loops for diagonal A entries, outputs (green) on the right.\n\n**The numbers on the edges are entries of the linearised state-space matrices.** Concretely:\n\n- `state[j] \u2192 state[i]` is `A[i,j]` \u2014 how much state *j* contributes to **dx_i/dt** per unit of *j*\n- `input[j] \u2192 state[i]` is `B[i,j]` \u2014 how much input *j* contributes to **dx_i/dt** per unit of *j*\n- `state[j] \u2192 output[k]` is `C[k,j]` \u2014 how much state *j* contributes to output *k*\n- `input[j] \u2192 output[k]` is `D[k,j]` \u2014 direct feedthrough\n\nFor the RLC plant below (with default R=1, L=\u00bd, C=1) you can read the linearised ODE straight off the diagram:\n\n$$\\frac{di_L}{dt} = -2\\,i_L \\;-\\; 2\\,v_C \\;+\\; 2\\,V_{in}, \\qquad \\frac{dv_C}{dt} = +1\\,i_L, \\qquad y = +1\\,v_C.$$\n\n(That's exactly $L\\dot i_L + R i_L + v_C = V_{in}$ and $C\\dot v_C = i_L$ rearranged into $\\dot x = Ax + Bu$, $y = Cx$ form.)\n\nThe `'renderer` option picks the engine: `'dot` (GraphViz, default) or `'mermaid` (Mermaid CLI). For raw text output use `mod_to_dot`, `mod_to_mermaid`, or `mod_dataflow(m, op, ['format = 'edges])` for the raw `[from, to, weight]` list.",
       "metadata": {}
     },
     {
@@ -543,7 +543,7 @@
     },
     {
       "cell_type": "markdown",
-      "source": "Same idea for the connector-composed RCFilter \u2014 note how rumoca has expanded the `connect()` statements into Kirchhoff equations, leaving us with a single state `c1_v` (capacitor voltage), the VoltageSource's `vs_Vin` as input, and `v_cap` as output.",
+      "source": "Same idea for the connector-composed RCFilter \u2014 rumoca expanded the `connect()` statements into Kirchhoff equations, leaving a single state `c1_v` (capacitor voltage), the VoltageSource's `vs_Vin` as input, and `v_cap` as output.\n\nReading the edges (default R=1, C=\u00bd):\n\n- `c1_v \u2192 c1_v : \u22122.0` is $A = -\\tfrac{1}{RC} = -2$\n- `vs_Vin \u2192 c1_v : +2.0` is $B = \\tfrac{1}{RC} = +2$\n- `c1_v \u2192 v_cap : +1.0` is $C = 1$ (the output is just the capacitor voltage)\n\ni.e. the standard RC low-pass $\\dot v_C = -\\tfrac{1}{RC}\\, v_C + \\tfrac{1}{RC}\\, V_{in}$ that we step-tested in section 6.",
       "metadata": {}
     },
     {

@@ -1,13 +1,31 @@
 {
   "version": 1,
   "package": "mochi",
-  "source": "./doc/mochi.md",
+  "source": "doc/mochi.md",
   "symbols": {
     "mod_cascade": {
       "type": "Function",
       "signature": "mod_cascade(SS1, SS2)",
       "summary": "",
       "body_md": "",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_dataflow": {
+      "type": "Function",
+      "signature": "mod_dataflow(m, op_point, [opts])",
+      "summary": "Render the linearised state-space connectivity as a dataflow diagram. Nonzero entries of A, B, C, D become labelled edges:",
+      "body_md": "Render the linearised state-space connectivity as a dataflow diagram. Nonzero\nentries of `A`, `B`, `C`, `D` become labelled edges:\n\n    B[i,j] ≠ 0   →   input[j]  ──>  state[i]   (label: B[i,j])\n    A[i,j] ≠ 0   →   state[j]  ──>  state[i]   (label: A[i,j])\n    C[k,i] ≠ 0   →   state[i]  ──>  output[k]  (label: C[k,i])\n    D[k,j] ≠ 0   →   input[j]  ──>  output[k]  (label: D[k,j])\n\n`opts` is an optional list of equations:\n\n- `format` — `'dot` (GraphViz, default), `'mermaid`, or `'edges` (raw list).\n- `threshold` — hide edges with `|weight| < threshold` (default `1e-12`).\n- `params` — parameter override list, passed to `mod_state_space`.\n\nReturns a Maxima string for `'dot` / `'mermaid`, or the raw edge list\n`[[from, to, weight], ...]` for `'edges`.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_diagram": {
+      "type": "Function",
+      "signature": "mod_diagram(m, op_point, [opts])",
+      "summary": "One-shot front-end: build a diagram of the model and render it inline. Shells out to the chosen renderer to write an SVG into Maxima's temp directory and prints the path so the maxima-extension / Aximar notebook UI picks it up and embeds the SVG content as image/svg+xml in the cell output (the notebook is self-contained — the temp file is read once at evaluation time and is no longer needed).",
+      "body_md": "One-shot front-end: build a diagram of the model and render it inline. Shells\nout to the chosen renderer to write an SVG into Maxima's temp directory and\nprints the path so the maxima-extension / Aximar notebook UI picks it up and\nembeds the SVG content as `image/svg+xml` in the cell output (the notebook is\nself-contained — the temp file is read once at evaluation time and is no\nlonger needed).\n\nReturns the SVG file path as a string.\n\n`opts` is an optional list of equations:\n\n- `diagram` — only `'dataflow` is supported right now (default).\n- `renderer` — `'dot` (GraphViz, default) or `'mermaid` (Mermaid CLI).\n  `'graphviz` is accepted as an alias for `'dot`.\n- `threshold`, `params` — passed through to `mod_dataflow` /\n  `mod_state_space`.\n\nRenderer prerequisites:\n\n- `'dot` — GraphViz `dot` on `$PATH` (or set the `DOT_BIN` environment\n  variable). `brew install graphviz` on macOS.\n- `'mermaid` — Mermaid CLI `mmdc` on `$PATH` (or set `MMDC_BIN`):\n  `npm install -g @mermaid-js/mermaid-cli`. The CLI itself depends on a\n  headless Chrome via puppeteer.",
       "examples": [],
       "see_also": [],
       "section": "Definitions for mochi"
@@ -93,6 +111,24 @@
       "see_also": [],
       "section": "Definitions for mochi"
     },
+    "mod_to_dot": {
+      "type": "Function",
+      "signature": "mod_to_dot(m, op_point, override_params)",
+      "summary": "",
+      "body_md": "",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_to_mermaid": {
+      "type": "Function",
+      "signature": "mod_to_mermaid(m, op_point, override_params)",
+      "summary": "Thin wrappers over mod_dataflow that pin the format. Return the diagram source as a Maxima string, suitable for embedding in markdown / piping into an external renderer.",
+      "body_md": "Thin wrappers over `mod_dataflow` that pin the format. Return the diagram\nsource as a Maxima string, suitable for embedding in markdown / piping into\nan external renderer.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
     "mod_transfer_function": {
       "type": "Function",
       "signature": "mod_transfer_function(m, op_point, override_params)",
@@ -123,7 +159,7 @@
     },
     {
       "title": "Example",
-      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Step response and impulse response */\n[t, y_step] : mod_step(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n[t, y_imp]  : mod_impulse(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n\n/* Symbolic transfer function */\nH : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Compose a cascade of two RLCs */\nSS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n[A2, B2, C2, D2] : mod_cascade(SS, SS);\n```"
+      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Step response and impulse response */\n[t, y_step] : mod_step(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n[t, y_imp]  : mod_impulse(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n\n/* Symbolic transfer function */\nH : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Compose a cascade of two RLCs */\nSS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n[A2, B2, C2, D2] : mod_cascade(SS, SS);\n\n/* Render a dataflow diagram inline */\nmod_diagram(m, [iL = 0, vC = 0, Vin = 0]);\n```"
     },
     {
       "title": "Note: `mod_load` does not touch session state",

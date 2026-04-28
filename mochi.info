@@ -1,4 +1,4 @@
-This is mochi.info, produced by makeinfo version 7.1 from mochi.texi.
+This is mochi.info, produced by makeinfo version 7.3 from mochi.texi.
 
 
 File: mochi.info,  Node: Top,  Next: Package mochi,  Up: (dir)
@@ -63,6 +63,12 @@ File: mochi.info,  Node: Definitions for mochi,  Next: Example,  Prev: Introduct
 * Function mod_transfer_function m op_point::
 * Function mod_transfer_function m op_point override_params::
 * Function mod_get m key::
+* Function mod_dataflow m op_point [opts]::
+* Function mod_to_dot m op_point::
+* Function mod_to_dot m op_point override_params::
+* Function mod_to_mermaid m op_point::
+* Function mod_to_mermaid m op_point override_params::
+* Function mod_diagram m op_point [opts]::
 
 
 File: mochi.info,  Node: Function mod_load path,  Next: Function mod_print m,  Up: Definitions for mochi
@@ -204,10 +210,89 @@ File: mochi.info,  Node: Function mod_transfer_function m op_point override_para
      file are substituted; with them, the supplied values are used.
 
 
-File: mochi.info,  Node: Function mod_get m key,  Prev: Function mod_transfer_function m op_point override_params,  Up: Definitions for mochi
+File: mochi.info,  Node: Function mod_get m key,  Next: Function mod_dataflow m op_point [opts],  Prev: Function mod_transfer_function m op_point override_params,  Up: Definitions for mochi
 
  -- Function: mod_get (M, KEY)
      Fetch one field from a model struct: ‘mod_get(m, 'params)’.
+
+
+File: mochi.info,  Node: Function mod_dataflow m op_point [opts],  Next: Function mod_to_dot m op_point,  Prev: Function mod_get m key,  Up: Definitions for mochi
+
+ -- Function: mod_dataflow (M, OP_POINT, [OPTS])
+     Render the linearised state-space connectivity as a dataflow
+     diagram.  Nonzero entries of ‘A’, ‘B’, ‘C’, ‘D’ become labelled
+     edges:
+
+     B[i,j] ≠ 0   →   input[j]  ──>  state[i]   (label: B[i,j])
+     A[i,j] ≠ 0   →   state[j]  ──>  state[i]   (label: A[i,j])
+     C[k,i] ≠ 0   →   state[i]  ──>  output[k]  (label: C[k,i])
+     D[k,j] ≠ 0   →   input[j]  ──>  output[k]  (label: D[k,j])
+
+     ‘opts’ is an optional list of equations:
+
+        • ‘format’ -- ‘'dot’ (GraphViz, default), ‘'mermaid’, or
+          ‘'edges’ (raw list).
+        • ‘threshold’ -- hide edges with ‘|weight| < threshold’ (default
+          ‘1e-12’).
+        • ‘params’ -- parameter override list, passed to
+          ‘mod_state_space’.
+
+     Returns a Maxima string for ‘'dot’ / ‘'mermaid’, or the raw edge
+     list ‘[[from, to, weight], ...]’ for ‘'edges’.
+
+
+File: mochi.info,  Node: Function mod_to_dot m op_point,  Next: Function mod_to_dot m op_point override_params,  Prev: Function mod_dataflow m op_point [opts],  Up: Definitions for mochi
+
+ -- Function: mod_to_dot (M, OP_POINT)
+
+
+File: mochi.info,  Node: Function mod_to_dot m op_point override_params,  Next: Function mod_to_mermaid m op_point,  Prev: Function mod_to_dot m op_point,  Up: Definitions for mochi
+
+ -- Function: mod_to_dot (M, OP_POINT, OVERRIDE_PARAMS)
+
+
+File: mochi.info,  Node: Function mod_to_mermaid m op_point,  Next: Function mod_to_mermaid m op_point override_params,  Prev: Function mod_to_dot m op_point override_params,  Up: Definitions for mochi
+
+ -- Function: mod_to_mermaid (M, OP_POINT)
+
+
+File: mochi.info,  Node: Function mod_to_mermaid m op_point override_params,  Next: Function mod_diagram m op_point [opts],  Prev: Function mod_to_mermaid m op_point,  Up: Definitions for mochi
+
+ -- Function: mod_to_mermaid (M, OP_POINT, OVERRIDE_PARAMS)
+     Thin wrappers over ‘mod_dataflow’ that pin the format.  Return the
+     diagram source as a Maxima string, suitable for embedding in
+     markdown / piping into an external renderer.
+
+
+File: mochi.info,  Node: Function mod_diagram m op_point [opts],  Prev: Function mod_to_mermaid m op_point override_params,  Up: Definitions for mochi
+
+ -- Function: mod_diagram (M, OP_POINT, [OPTS])
+     One-shot front-end: build a diagram of the model and render it
+     inline.  Shells out to the chosen renderer to write an SVG into
+     Maxima's temp directory and prints the path so the maxima-extension
+     / Aximar notebook UI picks it up and embeds the SVG content as
+     ‘image/svg+xml’ in the cell output (the notebook is self-contained
+     -- the temp file is read once at evaluation time and is no longer
+     needed).
+
+     Returns the SVG file path as a string.
+
+     ‘opts’ is an optional list of equations:
+
+        • ‘diagram’ -- only ‘'dataflow’ is supported right now
+          (default).
+        • ‘renderer’ -- ‘'dot’ (GraphViz, default) or ‘'mermaid’
+          (Mermaid CLI). ‘'graphviz’ is accepted as an alias for ‘'dot’.
+        • ‘threshold’, ‘params’ -- passed through to ‘mod_dataflow’ /
+          ‘mod_state_space’.
+
+     Renderer prerequisites:
+
+        • ‘'dot’ -- GraphViz ‘dot’ on ‘$PATH’ (or set the ‘DOT_BIN’
+          environment variable).  ‘brew install graphviz’ on macOS.
+        • ‘'mermaid’ -- Mermaid CLI ‘mmdc’ on ‘$PATH’ (or set
+          ‘MMDC_BIN’): ‘npm install -g @mermaid-js/mermaid-cli’.  The
+          CLI itself depends on a headless Chrome via puppeteer.
 
 
 File: mochi.info,  Node: Example,  Next: Note mod_load does not touch session state,  Prev: Definitions for mochi,  Up: Package mochi
@@ -232,6 +317,9 @@ H : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);
 /* Compose a cascade of two RLCs */
 SS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 [A2, B2, C2, D2] : mod_cascade(SS, SS);
+
+/* Render a dataflow diagram inline */
+mod_diagram(m, [iL = 0, vC = 0, Vin = 0]);
 
 
 File: mochi.info,  Node: Note mod_load does not touch session state,  Prev: Example,  Up: Package mochi
@@ -258,6 +346,10 @@ Appendix A Function and variable index
 
 * mod_cascade:                           Function mod_cascade SS1 SS2.
                                                                 (line 3)
+* mod_dataflow:                          Function mod_dataflow m op_point [opts].
+                                                                (line 3)
+* mod_diagram:                           Function mod_diagram m op_point [opts].
+                                                                (line 3)
 * mod_get:                               Function mod_get m key.
                                                                 (line 3)
 * mod_impulse:                           Function mod_impulse m op_point t_end [opts].
@@ -277,6 +369,14 @@ Appendix A Function and variable index
                                                                 (line 3)
 * mod_step:                              Function mod_step m op_point t_end [opts].
                                                                 (line 3)
+* mod_to_dot:                            Function mod_to_dot m op_point.
+                                                                (line 3)
+* mod_to_dot <1>:                        Function mod_to_dot m op_point override_params.
+                                                                (line 3)
+* mod_to_mermaid:                        Function mod_to_mermaid m op_point.
+                                                                (line 3)
+* mod_to_mermaid <1>:                    Function mod_to_mermaid m op_point override_params.
+                                                                (line 3)
 * mod_transfer_function:                 Function mod_transfer_function m op_point.
                                                                 (line 3)
 * mod_transfer_function <1>:             Function mod_transfer_function m op_point override_params.
@@ -284,49 +384,35 @@ Appendix A Function and variable index
 * mod_unity_feedback:                    Function mod_unity_feedback SS K.
                                                                 (line 3)
 
-
 
 Tag Table:
 Node: Top71
 Node: Package mochi174
-Ref: #package-mochi307
 Node: Introduction to mochi428
-Ref: #introduction-to-mochi581
 Node: Definitions for mochi1055
-Ref: #definitions-for-mochi1224
-Node: Function mod_load path1820
-Ref: #function-mod_load-path1958
-Node: Function mod_print m2777
-Ref: #function-mod_print-m2957
-Node: Function mod_state_space m op_point2992
-Ref: #function-mod_state_space-m-op_point3217
-Node: Function mod_state_space m op_point override_params3218
-Ref: #function-mod_state_space-m-op_point-override_params3484
-Node: Function mod_state_space_symbolic m op_point3987
-Ref: #function-mod_state_space_symbolic-m-op_point4260
-Node: Function mod_simulate m op_point u_fn t_end [opts]4605
-Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts4877
-Node: Function mod_step m op_point t_end [opts]5402
-Ref: #function-mod_step-m-op_point-t_end-opts5664
-Node: Function mod_impulse m op_point t_end [opts]5665
-Ref: #function-mod_impulse-m-op_point-t_end-opts5908
-Node: Function mod_cascade SS1 SS26442
-Ref: #function-mod_cascade-ss1-ss26655
-Node: Function mod_parallel SS1 SS26656
-Ref: #function-mod_parallel-ss1-ss26858
-Node: Function mod_unity_feedback SS K6859
-Ref: #function-mod_unity_feedback-ss-k7077
-Node: Function mod_transfer_function m op_point7718
-Ref: #function-mod_transfer_function-m-op_point7973
-Node: Function mod_transfer_function m op_point override_params7974
-Ref: #function-mod_transfer_function-m-op_point-override_params8236
-Node: Function mod_get m key8558
-Ref: #function-mod_get-m-key8734
-Node: Example8804
-Ref: #example8966
-Node: Note mod_load does not touch session state9482
-Ref: #note-mod_load-does-not-touch-session-state9694
-Node: Function and variable index10150
+Node: Function mod_load path2087
+Node: Function mod_print m3044
+Node: Function mod_state_space m op_point3259
+Node: Function mod_state_space m op_point override_params3485
+Node: Function mod_state_space_symbolic m op_point4254
+Node: Function mod_simulate m op_point u_fn t_end [opts]4872
+Node: Function mod_step m op_point t_end [opts]5669
+Node: Function mod_impulse m op_point t_end [opts]5932
+Node: Function mod_cascade SS1 SS26709
+Node: Function mod_parallel SS1 SS26923
+Node: Function mod_unity_feedback SS K7126
+Node: Function mod_transfer_function m op_point7985
+Node: Function mod_transfer_function m op_point override_params8241
+Node: Function mod_get m key8825
+Node: Function mod_dataflow m op_point [opts]9119
+Node: Function mod_to_dot m op_point10295
+Node: Function mod_to_dot m op_point override_params10525
+Node: Function mod_to_mermaid m op_point10767
+Node: Function mod_to_mermaid m op_point override_params11016
+Node: Function mod_diagram m op_point [opts]11466
+Node: Example12984
+Node: Note mod_load does not touch session state13745
+Node: Function and variable index14413
 
 End Tag Table
 
