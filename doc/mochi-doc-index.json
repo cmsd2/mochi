@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "package": "mochi",
+  "source": "./doc/mochi.md",
+  "symbols": {
+    "mod_get": {
+      "type": "Function",
+      "signature": "mod_get(m, key)",
+      "summary": "Fetch one field from a model struct: mod_get(m, 'params).",
+      "body_md": "Fetch one field from a model struct: `mod_get(m, 'params)`.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_load": {
+      "type": "Function",
+      "signature": "mod_load(path)",
+      "summary": "Parse a .mo file. Returns a model struct — a list of [tag = value] equations with these fields:",
+      "body_md": "Parse a `.mo` file. Returns a *model struct* — a list of `[tag = value]` equations\nwith these fields:\n\n- `name` — the model's name (string)\n- `params` — `[[symbol, default_value], ...]`\n- `states` — list of state-variable symbols (those with `der(...)` in equations)\n- `derivs` — list of derivative symbols, one per state, named `der_<state>`\n- `inputs` — list of input-variable symbols\n- `outputs` — list of output-variable symbols\n- `initial` — `[[state, initial_value], ...]` from `start = ...` annotations\n- `residuals` — list of equations in residual form (each ≡ 0)\n\nUse `mod_get(m, 'states)` to fetch a field.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_print": {
+      "type": "Function",
+      "signature": "mod_print(m)",
+      "summary": "Pretty-print a model struct.",
+      "body_md": "Pretty-print a model struct.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_state_space": {
+      "type": "Function",
+      "signature": "mod_state_space(m, op_point, override_params)",
+      "summary": "Linearise the model around an operating point. Returns [A, B, C, D] numeric matrices such that",
+      "body_md": "Linearise the model around an operating point. Returns `[A, B, C, D]` numeric matrices such that\n\n    dx/dt = A · (x − x₀) + B · (u − u₀)\n    y     = C · (x − x₀) + D · (u − u₀).\n\n`op_point` is a list of equations specifying a value for each state and each input,\ne.g. `[iL = 0, vC = 0, Vin = 0]`.\n\n`override_params` is an optional list of equations like `[R = 2.0, L = 0.4]` that\noverrides the defaults from the `.mo` file.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    }
+  },
+  "sections": [
+    {
+      "title": "Introduction to mochi",
+      "body_md": "`mochi` reads [Modelica](https://modelica.org/) plant models into Maxima as symbolic equations, using [rumoca](https://github.com/CogniPilot/rumoca) as the parser/compiler backend. The intended use is **pulling plant equations out of a model library and into a control-design workflow**: derive symbolic state-space matrices from a `.mo` file, feed them into LQR/Kalman/observer/MPC code, and never hand-transcribe equations again.\n\nTo use the package:\n\n```\nload(\"mochi\");\n```"
+    },
+    {
+      "title": "Definitions for mochi",
+      "body_md": ""
+    },
+    {
+      "title": "Example",
+      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n```"
+    },
+    {
+      "title": "Caveat: `mod_load` calls `kill(...)` on every model symbol",
+      "body_md": "When `mod_load` reads a `.mo` file, the helper script emits a Maxima file that\n**unconditionally `kill`s every parameter, state, derivative, input, and output\nname** before binding them. That ensures user variables from the surrounding\nsession don't accidentally substitute into the model's parameters or\nresiduals.\n\nFor example: the `DoubleTank.mo` example has a parameter named `A2`. If a user\nhad earlier in their session bound `A2` to a matrix (say from `[A, B, C, D] :\nmod_state_space(...)` followed by `A2 : ...`), then loading the model would\notherwise pick up that matrix value instead of treating `A2` as a fresh\nsymbol. The `kill` call resets it.\n\nPractical consequence: **calling `mod_load` will erase any global bindings\nof the model's parameter, state, and I/O symbols**. If you need to preserve a\nsession value, save it to a different name first, or use a `block(...)` to\nscope the model load."
+    }
+  ]
+}
