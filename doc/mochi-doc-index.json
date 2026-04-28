@@ -3,11 +3,29 @@
   "package": "mochi",
   "source": "./doc/mochi.md",
   "symbols": {
+    "mod_cascade": {
+      "type": "Function",
+      "signature": "mod_cascade(SS1, SS2)",
+      "summary": "",
+      "body_md": "",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
     "mod_get": {
       "type": "Function",
       "signature": "mod_get(m, key)",
       "summary": "Fetch one field from a model struct: mod_get(m, 'params).",
       "body_md": "Fetch one field from a model struct: `mod_get(m, 'params)`.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_impulse": {
+      "type": "Function",
+      "signature": "mod_impulse(m, op_point, t_end, [opts])",
+      "summary": "Convenience wrappers over mod_simulate:",
+      "body_md": "Convenience wrappers over `mod_simulate`:\n\n- `mod_step` applies a step to the chosen input (`input_index`, default 1) of\n  magnitude `magnitude` (default 1), with all other inputs held at zero.\n- `mod_impulse` applies a discrete impulse approximation: `u[0] = magnitude/dt`\n  on the chosen input, zero thereafter, so that ∫u dt ≈ magnitude.\n\nBoth accept the same opts as `mod_simulate` plus `input_index` and `magnitude`.",
       "examples": [],
       "see_also": [],
       "section": "Definitions for mochi"
@@ -21,6 +39,15 @@
       "see_also": [],
       "section": "Definitions for mochi"
     },
+    "mod_parallel": {
+      "type": "Function",
+      "signature": "mod_parallel(SS1, SS2)",
+      "summary": "",
+      "body_md": "",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
     "mod_print": {
       "type": "Function",
       "signature": "mod_print(m)",
@@ -30,11 +57,56 @@
       "see_also": [],
       "section": "Definitions for mochi"
     },
+    "mod_simulate": {
+      "type": "Function",
+      "signature": "mod_simulate(m, op_point, u_fn, t_end, [opts])",
+      "summary": "Simulate the linearised model from zero state with input u_fn(t). u_fn must return a list of length |inputs|. Returns [t_list, y_list]. For SISO plants y_list is a flat list; for multi-output plants it is a list of length-|outputs| lists.",
+      "body_md": "Simulate the linearised model from zero state with input `u_fn(t)`. `u_fn`\nmust return a list of length `|inputs|`. Returns `[t_list, y_list]`. For SISO\nplants `y_list` is a flat list; for multi-output plants it is a list of\nlength-`|outputs|` lists.\n\nOptional `opts` is a list of equations, recognising:\n\n- `dt` — sample period (default `t_end/500`)\n- `params` — parameter override list (default: `.mo` file's defaults)",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
     "mod_state_space": {
       "type": "Function",
       "signature": "mod_state_space(m, op_point, override_params)",
       "summary": "Linearise the model around an operating point. Returns [A, B, C, D] numeric matrices such that",
       "body_md": "Linearise the model around an operating point. Returns `[A, B, C, D]` numeric matrices such that\n\n    dx/dt = A · (x − x₀) + B · (u − u₀)\n    y     = C · (x − x₀) + D · (u − u₀).\n\n`op_point` is a list of equations specifying a value for each state and each input,\ne.g. `[iL = 0, vC = 0, Vin = 0]`.\n\n`override_params` is an optional list of equations like `[R = 2.0, L = 0.4]` that\noverrides the defaults from the `.mo` file.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_state_space_symbolic": {
+      "type": "Function",
+      "signature": "mod_state_space_symbolic(m, op_point)",
+      "summary": "Same shape as mod_state_space, but returns Maxima matrices with parameters left as symbols. Useful for inspecting the closed-form A, B, C, D before substituting numerical values.",
+      "body_md": "Same shape as `mod_state_space`, but returns Maxima matrices with **parameters\nleft as symbols**. Useful for inspecting the closed-form A, B, C, D before\nsubstituting numerical values.\n\nFor nonlinear plants, the Jacobian still depends on the operating point;\n`op_point` is substituted in but parameters are not.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_step": {
+      "type": "Function",
+      "signature": "mod_step(m, op_point, t_end, [opts])",
+      "summary": "",
+      "body_md": "",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_transfer_function": {
+      "type": "Function",
+      "signature": "mod_transfer_function(m, op_point, override_params)",
+      "summary": "Compute H(s) = C·(sI − A)⁻¹·B + D symbolically. Returns a Maxima expression (scalar for SISO, matrix for MIMO). The Laplace variable is s.",
+      "body_md": "Compute `H(s) = C·(sI − A)⁻¹·B + D` symbolically. Returns a Maxima expression\n(scalar for SISO, matrix for MIMO). The Laplace variable is `s`.\n\nWithout `override_params`, the parameter defaults from the `.mo` file are\nsubstituted; with them, the supplied values are used.",
+      "examples": [],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
+    "mod_unity_feedback": {
+      "type": "Function",
+      "signature": "mod_unity_feedback(SS, K)",
+      "summary": "Block-stack two state-space tuples to form a connected system, returning the result as a tuple [A, B, C, D] ready for further composition.",
+      "body_md": "Block-stack two state-space tuples to form a connected system, returning the\nresult as a tuple `[A, B, C, D]` ready for further composition.\n\n- `mod_cascade(SS1, SS2)` — output of system 1 fed into input of system 2.\n- `mod_parallel(SS1, SS2)` — same input to both, outputs summed.\n- `mod_unity_feedback(SS, K)` — close a negative feedback loop with scalar\n  gain `K`. Assumes `D = 0` for the open loop.\n\n`SS_i` is `[A, B, C, D]` (Maxima matrices), as returned by `mod_state_space`\nor `mod_state_space_symbolic`.",
       "examples": [],
       "see_also": [],
       "section": "Definitions for mochi"
@@ -51,7 +123,7 @@
     },
     {
       "title": "Example",
-      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n```"
+      "body_md": "```maxima\nload(\"mochi\");\n\nm : mod_load(\"examples/RLCircuit.mo\");\nmod_print(m);\n\n[A, B, C, D] : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Step response and impulse response */\n[t, y_step] : mod_step(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n[t, y_imp]  : mod_impulse(m, [iL = 0, vC = 0, Vin = 0], 5.0);\n\n/* Symbolic transfer function */\nH : mod_transfer_function(m, [iL = 0, vC = 0, Vin = 0]);\n\n/* Compose a cascade of two RLCs */\nSS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);\n[A2, B2, C2, D2] : mod_cascade(SS, SS);\n```"
     },
     {
       "title": "Caveat: `mod_load` calls `kill(...)` on every model symbol",
