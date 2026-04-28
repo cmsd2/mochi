@@ -21,7 +21,7 @@ File: mochi.info,  Node: Package mochi,  Next: Function and variable index,  Pre
 * Introduction to mochi::
 * Definitions for mochi::
 * Example::
-* Caveat mod_load calls kill on every model symbol::
+* Note mod_load does not touch session state::
 
 
 File: mochi.info,  Node: Introduction to mochi,  Next: Definitions for mochi,  Up: Package mochi
@@ -210,7 +210,7 @@ File: mochi.info,  Node: Function mod_get m key,  Prev: Function mod_transfer_fu
      Fetch one field from a model struct: ‘mod_get(m, 'params)’.
 
 
-File: mochi.info,  Node: Example,  Next: Caveat mod_load calls kill on every model symbol,  Prev: Definitions for mochi,  Up: Package mochi
+File: mochi.info,  Node: Example,  Next: Note mod_load does not touch session state,  Prev: Definitions for mochi,  Up: Package mochi
 
 1.3 Example
 ===========
@@ -234,27 +234,18 @@ SS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 [A2, B2, C2, D2] : mod_cascade(SS, SS);
 
 
-File: mochi.info,  Node: Caveat mod_load calls kill on every model symbol,  Prev: Example,  Up: Package mochi
+File: mochi.info,  Node: Note mod_load does not touch session state,  Prev: Example,  Up: Package mochi
 
-1.4 Caveat: ‘mod_load’ calls ‘kill(...)’ on every model symbol
-==============================================================
+1.4 Note: ‘mod_load’ does not touch session state
+=================================================
 
-When ‘mod_load’ reads a ‘.mo’ file, the helper script emits a Maxima
-file that *unconditionally ‘kill’s every parameter, state, derivative,
-input, and output name* before binding them.  That ensures user
-variables from the surrounding session don't accidentally substitute
-into the model's parameters or residuals.
-
-For example: the ‘DoubleTank.mo’ example has a parameter named ‘A2’.  If
-a user had earlier in their session bound ‘A2’ to a matrix (say from
-‘[A, B, C, D] : mod_state_space(...)’ followed by ‘A2 : ...’), then
-loading the model would otherwise pick up that matrix value instead of
-treating ‘A2’ as a fresh symbol.  The ‘kill’ call resets it.
-
-Practical consequence: *calling ‘mod_load’ will erase any global
-bindings of the model's parameter, state, and I/O symbols*.  If you need
-to preserve a session value, save it to a different name first, or use a
-‘block(...)’ to scope the model load.
+‘mod_load’ runs in Common Lisp (‘mochi-loader.lisp’) and constructs the
+model struct directly -- it interns fresh Lisp symbol objects for every
+parameter, state, derivative, input, and output name.  *No Maxima-side
+eval pass means no global bindings are created or destroyed*, so a user
+variable in your session that shares a name with a model parameter
+(e.g. ‘A2’ for ‘DoubleTank’'s second-tank area) is safe across
+‘mod_load’ calls.
 
 
 File: mochi.info,  Node: Function and variable index,  Prev: Package mochi,  Up: Top
@@ -299,43 +290,43 @@ Tag Table:
 Node: Top71
 Node: Package mochi174
 Ref: #package-mochi307
-Node: Introduction to mochi434
-Ref: #introduction-to-mochi587
-Node: Definitions for mochi1061
-Ref: #definitions-for-mochi1230
-Node: Function mod_load path1826
-Ref: #function-mod_load-path1964
-Node: Function mod_print m2783
-Ref: #function-mod_print-m2963
-Node: Function mod_state_space m op_point2998
-Ref: #function-mod_state_space-m-op_point3223
-Node: Function mod_state_space m op_point override_params3224
-Ref: #function-mod_state_space-m-op_point-override_params3490
-Node: Function mod_state_space_symbolic m op_point3993
-Ref: #function-mod_state_space_symbolic-m-op_point4266
-Node: Function mod_simulate m op_point u_fn t_end [opts]4611
-Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts4883
-Node: Function mod_step m op_point t_end [opts]5408
-Ref: #function-mod_step-m-op_point-t_end-opts5670
-Node: Function mod_impulse m op_point t_end [opts]5671
-Ref: #function-mod_impulse-m-op_point-t_end-opts5914
-Node: Function mod_cascade SS1 SS26448
-Ref: #function-mod_cascade-ss1-ss26661
-Node: Function mod_parallel SS1 SS26662
-Ref: #function-mod_parallel-ss1-ss26864
-Node: Function mod_unity_feedback SS K6865
-Ref: #function-mod_unity_feedback-ss-k7083
-Node: Function mod_transfer_function m op_point7724
-Ref: #function-mod_transfer_function-m-op_point7979
-Node: Function mod_transfer_function m op_point override_params7980
-Ref: #function-mod_transfer_function-m-op_point-override_params8242
-Node: Function mod_get m key8564
-Ref: #function-mod_get-m-key8740
-Node: Example8810
-Ref: #example8978
-Node: Caveat mod_load calls kill on every model symbol9494
-Ref: #caveat-mod_load-calls-kill...-on-every-model-symbol9742
-Node: Function and variable index10699
+Node: Introduction to mochi428
+Ref: #introduction-to-mochi581
+Node: Definitions for mochi1055
+Ref: #definitions-for-mochi1224
+Node: Function mod_load path1820
+Ref: #function-mod_load-path1958
+Node: Function mod_print m2777
+Ref: #function-mod_print-m2957
+Node: Function mod_state_space m op_point2992
+Ref: #function-mod_state_space-m-op_point3217
+Node: Function mod_state_space m op_point override_params3218
+Ref: #function-mod_state_space-m-op_point-override_params3484
+Node: Function mod_state_space_symbolic m op_point3987
+Ref: #function-mod_state_space_symbolic-m-op_point4260
+Node: Function mod_simulate m op_point u_fn t_end [opts]4605
+Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts4877
+Node: Function mod_step m op_point t_end [opts]5402
+Ref: #function-mod_step-m-op_point-t_end-opts5664
+Node: Function mod_impulse m op_point t_end [opts]5665
+Ref: #function-mod_impulse-m-op_point-t_end-opts5908
+Node: Function mod_cascade SS1 SS26442
+Ref: #function-mod_cascade-ss1-ss26655
+Node: Function mod_parallel SS1 SS26656
+Ref: #function-mod_parallel-ss1-ss26858
+Node: Function mod_unity_feedback SS K6859
+Ref: #function-mod_unity_feedback-ss-k7077
+Node: Function mod_transfer_function m op_point7718
+Ref: #function-mod_transfer_function-m-op_point7973
+Node: Function mod_transfer_function m op_point override_params7974
+Ref: #function-mod_transfer_function-m-op_point-override_params8236
+Node: Function mod_get m key8558
+Ref: #function-mod_get-m-key8734
+Node: Example8804
+Ref: #example8966
+Node: Note mod_load does not touch session state9482
+Ref: #note-mod_load-does-not-touch-session-state9694
+Node: Function and variable index10150
 
 End Tag Table
 
