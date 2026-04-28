@@ -216,39 +216,60 @@ Integrate the model's nonlinear DAE via SUNDIALS CVODE.
   - `atol` — absolute tolerance (default `1e-8`).
   - `return` — `'outputs` (default) or `'states` to get the full state
     trajectory instead of the output trajectory.
-  - `events` — list of `[event_expr, reset_eqs]` pairs for hybrid systems
-    (see below).
+  - `events` — `'auto` (default), `[]`, or an explicit list of event
+    tuples for hybrid systems (see below).
 
 Returns `[t_list, y_list]`. For SISO `y_list` is a flat list; for
 multi-output it's a list of length-`|outputs|` lists.
 
 #### Discrete events
 
-For models with `when` clauses (Modelica's discrete-event mechanism),
-pass an `'events` list of `[event_expr, reset_eqs]` pairs:
+`when` clauses in the .mo file are auto-extracted by `mod_load` and
+stored in the model struct's `events` field. `mod_simulate_nonlinear`
+uses them by default. Inspect what was extracted with `mod_print`:
+
+```
+events:
+   when  h <= 0 and v < 0 :  [v = -e*v]
+```
+
+To run with the auto-extracted events, just call `mod_simulate_nonlinear`
+without the `'events` opt:
 
 ```maxima
 [t, x] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],
                                 lambda([t], []),
                                 5.0,
-                                ['return = 'states,
-                                 'events = [[h, [v = -e * v]]]])$
+                                ['return = 'states])$
 ```
 
-- `event_expr` is a Maxima expression in the state symbols. Its zero
-  crossings (detected by SUNDIALS' rootfinder) trigger the event.
-- `reset_eqs` is a list of state-reset equations like `[v = -e * v]`
-  applied at the event time to compute the post-event state.
-  Variables not mentioned keep their current value.
+Three modes for the `'events` opt:
 
-The integrator runs segment-by-segment between requested sample times,
-restarting CVODE from the post-reset state each time an event fires.
-After each reset the state is nudged forward by a tiny Euler half-step
-(`1e-4` s by default) to push it off the event boundary, avoiding
-spurious re-detection of the same zero-crossing. There's also a
-watchdog limit of 100 events per segment to break Zeno-like loops.
+- **`'auto`** (default) — use `mod_get(m, 'events)`.
+- **`[]`** — disable event handling (pure continuous integration, even
+  if the model has `when` clauses).
+- **explicit list** — override the auto-extraction. Each entry is
+  `[detector, reset_eqs]` or `[detector, reset_eqs, guard]`:
+  - `detector` — a Maxima expression in the state symbols. Its zero
+    crossings (detected by SUNDIALS' rootfinder) trigger the event.
+  - `reset_eqs` — list of state-reset equations applied at the event
+    time. Variables not mentioned keep their current value.
+  - `guard` (optional) — a Maxima expression evaluated at event time;
+    the reset is applied only if `guard > 0`. Used to translate
+    compound `when` conditions (`h <= 0 AND v < 0`) faithfully.
+    Defaults to `true`.
 
-See `examples/BouncingBall.mo` for a complete worked example.
+The integrator runs segment-by-segment between requested sample times.
+When CVODE reports a zero-crossing, the loop evaluates the guard at
+the event-time state — if positive, applies the reset and restarts
+from a tiny Euler half-step past the event (so CVODE doesn't immediately
+re-detect the boundary). If the guard is non-positive, the detection
+is treated as spurious and integration continues without a reset. A
+watchdog (100 events per segment, 1 ms dedup window) breaks Zeno-like
+loops.
+
+See `examples/BouncingBall.mo` and the `04_events` notebook for a
+complete worked example.
 
 ### Function: mod_step_nonlinear (m, x0, t_end, [opts])
 ### Function: mod_impulse_nonlinear (m, x0, t_end, [opts])

@@ -627,6 +627,224 @@ inputs."
   (let* ((text (mochi--strip-comments (mochi--read-file mo-path))))
     (or (nth-value 0 (mochi--top-model-block text)) "Unnamed")))
 
+;; --- Event extraction (Modelica `when' clauses) ------------------------
+;;
+;; rumoca surfaces `when' clauses through two extra top-level keys:
+;;   :f--z — list of discrete state-update equations.  Each entry is
+;;           {lhs: var, rhs: If(branches=[[Edge(cond), new_val]], else=var)}
+;;           ("set var to new_val on the rising edge of cond, otherwise
+;;            keep var unchanged").
+;;   :f--c — the boolean condition expressions (we don't strictly need
+;;           these, since they're embedded in the f_z If branches).
+;;
+;; mochi-nonlinear's mod_simulate_nonlinear uses the events list at the
+;; Maxima level: each entry is `[detector, reset_eqs, guard, cond_pretty]'
+;; where DETECTOR is a real-valued expression whose zero crossings CVODE
+;; watches for, RESET_EQS is the list of state-update equations applied
+;; at the event time (with `pre(...)' simplified — at event time the
+;; pre-event state is exactly what CVODE returns), GUARD is a Maxima
+;; expression that's positive iff the original boolean condition holds
+;; at the event time (so the loop can reject spurious detections), and
+;; COND_PRETTY is the original boolean for display.
+;;
+;; A single `when (A and B)' clause produces TWO entries — one detector
+;; per primitive inequality.  Both share the same reset and guard, so
+;; whichever inequality CVODE detects first triggers a re-evaluation of
+;; the full conjunction; only if the guard accepts does the reset fire.
+
+(defun mochi--strip-edge (node)
+  "If NODE is a BuiltinCall(Edge, [arg]), return ARG.  Otherwise return
+   NODE unchanged."
+  (multiple-value-bind (tag body) (mochi--unwrap-tagged node)
+    (cond
+      ((and (eq tag :*builtin-call)
+            (string= (mochi--get body :function) "Edge"))
+       (first (mochi--get body :args)))
+      (t node))))
+
+(defun mochi--strip-pre (expr)
+  "Walk a Maxima Lisp expression and replace `($pre x)' (Modelica's
+   `pre(x)' builtin) with just `x'.  In an event-time substitution
+   context the pre-event state is exactly what CVODE hands back, so
+   `pre(v)' ≡ `v'."
+  (cond
+    ((atom expr) expr)
+    ((and (consp (car expr))
+          (eq (caar expr) '$pre)
+          (consp (cdr expr)))
+     (mochi--strip-pre (cadr expr)))
+    (t (cons (car expr) (mapcar #'mochi--strip-pre (cdr expr))))))
+
+(defun mochi--ast-binary-op-tag (node)
+  "Return the binary-op tag (e.g. :*le, :*and) for a Binary AST node,
+   or nil if NODE isn't a Binary."
+  (multiple-value-bind (tag body) (mochi--unwrap-tagged node)
+    (when (eq tag :*binary)
+      (caar (mochi--get body :op)))))
+
+(defun mochi--cond-unary-not-body (node)
+  "If NODE is a Unary with op = Not, return its body alist.  Else nil."
+  (multiple-value-bind (tag body) (mochi--unwrap-tagged node)
+    (when (eq tag :*unary)
+      (let ((op-tag (caar (mochi--get body :op))))
+        (when (eq op-tag :*not) body)))))
+
+(defun mochi--lhs-rhs-mx (node)
+  "NODE is a Binary; return (values LHS-MX RHS-MX) — the operands as
+   Maxima Lisp expressions."
+  (let ((body (cdar node)))
+    (values (mochi--ast-to-maxima (mochi--get body :lhs))
+            (mochi--ast-to-maxima (mochi--get body :rhs)))))
+
+(defun mochi--mx-sub (a b)
+  "Maxima `a - b' in Lisp form."
+  (list '(mplus) a (list '(mtimes) -1 b)))
+
+(defun mochi--cond-to-detectors (cond-node)
+  "Walk a boolean-condition AST and return a list of `(detector dir)'
+   pairs covering every primitive comparison reachable from the root.
+   DIR is -1 (falling crossing activates the inequality), +1 (rising),
+   or 0 (any).  All conjuncts AND disjuncts are visited so any
+   inequality firing triggers re-evaluation of the guard."
+  (let ((tag (mochi--ast-binary-op-tag cond-node)))
+    (case tag
+      ((:*le :*lt)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list (list (mochi--mx-sub lhs rhs) -1))))
+      ((:*ge :*gt)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list (list (mochi--mx-sub lhs rhs) +1))))
+      ((:*eq)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list (list (mochi--mx-sub lhs rhs) 0))))
+      ((:*and :*or)
+       (let ((body (cdar cond-node)))
+         (append (mochi--cond-to-detectors (mochi--get body :lhs))
+                 (mochi--cond-to-detectors (mochi--get body :rhs)))))
+      (otherwise
+       (let ((not-body (mochi--cond-unary-not-body cond-node)))
+         (cond
+           (not-body
+            ;; not(c): flip directions.
+            (mapcar (lambda (det)
+                      (list (first det) (- (second det))))
+                    (mochi--cond-to-detectors (mochi--get not-body :rhs))))
+           (t
+            (error "mochi: unsupported event condition AST tag ~S"
+                   (and (consp cond-node) (caar cond-node))))))))))
+
+(defun mochi--cond-to-guard (cond-node)
+  "Convert a boolean condition AST to a real-valued Maxima expression
+   that is > 0 iff the condition holds.  Caller checks `> 0' to decide
+   whether to fire the reset."
+  (let ((tag (mochi--ast-binary-op-tag cond-node)))
+    (case tag
+      ((:*le :*lt)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         ;; lhs <= rhs  ⇔  rhs - lhs ≥ 0
+         (mochi--mx-sub rhs lhs)))
+      ((:*ge :*gt)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (mochi--mx-sub lhs rhs)))
+      ((:*eq)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         ;; -|diff|^2 — zero only at equality, negative otherwise.
+         (let ((diff (mochi--mx-sub lhs rhs)))
+           (list '(mtimes) -1 (list '(mexpt) diff 2)))))
+      ((:*and)
+       (let ((body (cdar cond-node)))
+         (list '($min)
+               (mochi--cond-to-guard (mochi--get body :lhs))
+               (mochi--cond-to-guard (mochi--get body :rhs)))))
+      ((:*or)
+       (let ((body (cdar cond-node)))
+         (list '($max)
+               (mochi--cond-to-guard (mochi--get body :lhs))
+               (mochi--cond-to-guard (mochi--get body :rhs)))))
+      (otherwise
+       (let ((not-body (mochi--cond-unary-not-body cond-node)))
+         (cond
+           (not-body
+            (list '(mtimes) -1
+                  (mochi--cond-to-guard (mochi--get not-body :rhs))))
+           (t
+            (error "mochi: unsupported event condition AST tag ~S"
+                   (and (consp cond-node) (caar cond-node))))))))))
+
+(defun mochi--cond-pretty (cond-node)
+  "Convert a boolean condition AST to a Maxima expression preserving
+   the original op shape, for display via mod_print."
+  (let ((tag (mochi--ast-binary-op-tag cond-node)))
+    (case tag
+      ((:*le)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mleqp) lhs rhs)))
+      ((:*lt)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mlessp) lhs rhs)))
+      ((:*ge)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mgeqp) lhs rhs)))
+      ((:*gt)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mgreaterp) lhs rhs)))
+      ((:*eq)
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mequal) lhs rhs)))
+      ((:*and)
+       (let ((body (cdar cond-node)))
+         (list '(mand)
+               (mochi--cond-pretty (mochi--get body :lhs))
+               (mochi--cond-pretty (mochi--get body :rhs)))))
+      ((:*or)
+       (let ((body (cdar cond-node)))
+         (list '(mor)
+               (mochi--cond-pretty (mochi--get body :lhs))
+               (mochi--cond-pretty (mochi--get body :rhs)))))
+      (otherwise
+       (let ((not-body (mochi--cond-unary-not-body cond-node)))
+         (cond
+           (not-body
+            (list '(mnot) (mochi--cond-pretty (mochi--get not-body :rhs))))
+           (t
+            ;; Fall back to plain conversion (best effort).
+            (mochi--ast-to-maxima cond-node))))))))
+
+(defun mochi--fz-to-events (fz-entry)
+  "Convert one rumoca f_z entry to a list of event tuples
+   `(detector reset-eqs guard cond-pretty)' — one per primitive
+   detector in the boolean condition.  All entries share the same
+   reset and guard.  Returns nil if the entry doesn't match the
+   expected If(branches=[[Edge(cond), new_val]], else=...) shape."
+  (let* ((lhs-name (mochi--get fz-entry :lhs))
+         (rhs-node (mochi--get fz-entry :rhs)))
+    (multiple-value-bind (tag if-body) (mochi--unwrap-tagged rhs-node)
+      (when (eq tag :*if)
+        (let* ((branches (mochi--get if-body :branches))
+               (first-branch (first branches))
+               (raw-cond (first first-branch))
+               (new-value-node (second first-branch))
+               (cond-node (mochi--strip-edge raw-cond))
+               (detectors (mochi--cond-to-detectors cond-node))
+               (guard (mochi--cond-to-guard cond-node))
+               (cond-pretty (mochi--cond-pretty cond-node))
+               (new-value-mx (mochi--strip-pre
+                              (mochi--ast-to-maxima new-value-node)))
+               (reset-eq (list '(mequal) (mochi--mxsym lhs-name) new-value-mx))
+               (reset-eqs (mochi--mlist (list reset-eq))))
+          (mapcar (lambda (det)
+                    (mochi--mlist (list (first det)
+                                        reset-eqs
+                                        guard
+                                        cond-pretty)))
+                  detectors))))))
+
+(defun mochi--extract-events (raw-fz)
+  "Build the events list for the model struct.  Maps every f_z entry
+   through mochi--fz-to-events (which may produce multiple tuples per
+   entry) and flattens into a single Maxima list."
+  (mochi--mlist (mapcan #'mochi--fz-to-events raw-fz)))
+
 ;; --- Build the Maxima struct -------------------------------------------
 
 (defun mochi--start-value (info)
@@ -729,6 +947,7 @@ uses that as the explicit model name to compile."
          (raw-states (cdr (assoc :x model)))
          (raw-algebraics (cdr (assoc :y model)))
          (raw-eqs (cdr (assoc :f--x model)))
+         (raw-fz (cdr (assoc :f--z model)))
          (residual-exprs (mapcar (lambda (e)
                                    (mochi--ast-to-maxima (mochi--get e :residual)))
                                  raw-eqs)))
@@ -770,4 +989,5 @@ uses that as the explicit model name to compile."
                (mochi--mequal '$inputs (mochi--mlist input-syms))
                (mochi--mequal '$outputs (mochi--mlist output-syms))
                (mochi--mequal '$initial (mochi--initial-list raw-states))
-               (mochi--mequal '$residuals (mochi--mlist residual-exprs))))))))
+               (mochi--mequal '$residuals (mochi--mlist residual-exprs))
+               (mochi--mequal '$events (mochi--extract-events raw-fz))))))))

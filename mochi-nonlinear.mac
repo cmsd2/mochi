@@ -85,24 +85,43 @@ mod__apply_reset(reset_rule, y_ev, t_ev, states, [extra_subst]) := block(
  *              rtol      — relative tolerance (default 1e-8)
  *              atol      — absolute tolerance (default 1e-8)
  *              return    — 'outputs (default) or 'states
- *              events    — list of [event_expr, reset_eqs] pairs (see below)
+ *              events    — `'auto' (default), `[]', or an explicit list
+ *                          of event tuples (see below)
  *
  * Returns `[t_list, y_list]`.  For SISO `y_list` is a flat list; for
  * multi-output it's a list of length-|outputs| lists.  When 'return =
  * 'states the trajectory is the full state vector at each sample.
  *
- * Events: `'events = [[g_1, R_1], [g_2, R_2], ...]` where each `g_i' is
- * a Maxima expression in the state symbols (and optionally `t') whose
- * zero crossings the integrator detects, and each `R_i' is a list of
- * state-reset equations like `[v = -e*v, h = 0]' applied at the event.
- * Variables not mentioned in `R_i' keep their current value through
- * the event.  Mod_simulate_nonlinear integrates segment-by-segment
- * between requested times, restarting CVODE from the post-reset state
- * each time an event fires.
+ * Events: each tuple is `[detector, reset_eqs]' or
+ * `[detector, reset_eqs, guard]' where:
+ *   - DETECTOR is a Maxima expression in the state symbols (and
+ *     optionally `t').  CVODE's rootfinder watches for zero crossings.
+ *   - RESET_EQS is a list of state-update equations like
+ *     `[v = -e*v, h = 0]' applied at the event time.  Variables not
+ *     mentioned keep their current value.
+ *   - GUARD (optional) is a Maxima expression evaluated at the event
+ *     time; the reset is applied only if `guard > 0'.  Used to
+ *     translate compound `when' conditions like `h <= 0 and v < 0'
+ *     faithfully (without it we'd silently drop the second conjunct).
+ *
+ * Defaults:
+ *   - `'events = 'auto' (default): use the events auto-extracted from
+ *     the model's `when' clauses (mod_get(m, 'events)).  Mod_print
+ *     shows what was extracted.
+ *   - `'events = []': opt out — pure continuous integration even if
+ *     the model has a `when' clause.
+ *   - explicit list: override the auto-extraction.  Tuples may be
+ *     2- or 3-element; missing GUARD defaults to true.
+ *
+ * Mod_simulate_nonlinear integrates segment-by-segment between
+ * requested times, restarting CVODE from the post-reset state each
+ * time an event fires AND its guard accepts.  Events whose guard
+ * evaluates to <= 0 (the boolean condition isn't actually true) are
+ * treated as spurious and skipped.
  */
 mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   [opts1, dt, params, method, rtol, atol, return_what, events_in,
-   event_exprs, reset_rules,
+   model_events, event_exprs, reset_rules, event_guards,
    states, inputs, outputs,
    der_eqs, alg_eqs, output_eqs,
    param_subst, der_exprs, output_exprs,
@@ -116,7 +135,17 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   rtol        : mod__opts_get(opts1, 'rtol,   1.0e-8),
   atol        : mod__opts_get(opts1, 'atol,   1.0e-8),
   return_what : mod__opts_get(opts1, 'return, 'outputs),
-  events_in   : mod__opts_get(opts1, 'events, []),
+  events_in   : mod__opts_get(opts1, 'events, 'auto),
+  /* Resolve `'auto' to the model's auto-extracted events list (if any),
+     and normalise 2-element entries (legacy / manual API) by appending
+     a default guard of `true'. */
+  if events_in = 'auto then
+    events_in : block([res : errcatch(mod_get(m, 'events))],
+                  if res = [] then [] else res[1]),
+  events_in : map(lambda([e],
+                   if length(e) >= 3 then [e[1], e[2], e[3]]
+                                     else [e[1], e[2], true]),
+                  events_in),
 
   states  : mod_get(m, 'states),
   inputs  : mod_get(m, 'inputs),
@@ -132,12 +161,14 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
     param_subst : append(params, param_subst),
   der_exprs    : map(lambda([e], subst(param_subst, e[2])), der_eqs),
   output_exprs : map(lambda([e], subst(param_subst, e[2])), output_eqs),
-  /* Bake parameters into event expressions too, so np_cvode's
-     compiled root function only sees `[t, x1, ..., xn]'.  The reset
-     rules keep their parameters symbolic — mod__apply_reset gets the
-     param_subst as an extra subst list. */
-  event_exprs : map(lambda([ev], subst(param_subst, ev[1])), events_in),
-  reset_rules : map(second, events_in),
+  /* Bake parameters into event expressions and guards (so np_cvode's
+     compiled root function only sees `[t, x1, ..., xn]', and so the
+     guard evaluation in the loop only needs to substitute states +
+     inputs + t).  The reset rules keep their parameters symbolic —
+     mod__apply_reset takes param_subst as an extra subst list. */
+  event_exprs  : map(lambda([ev], subst(param_subst, ev[1])), events_in),
+  reset_rules  : map(lambda([ev], ev[2]), events_in),
+  event_guards : map(lambda([ev], subst(param_subst, ev[3])), events_in),
 
   /* Use np_cvode's expression mode (compiles the RHS into native Lisp
      closures — much faster than function mode).  Evaluate u_fn at the
@@ -167,15 +198,22 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
     x_traj : makelist(makelist(np_ref(traj, k, i), i, 1, n),
                       k, 0, nt - 1)
   ) else (
-    /* Event re-detection guard.  By construction, the post-reset
-       state sits ON the event boundary (h ≈ 0 for a bouncing ball),
-       so CVODE's rootfinder will detect another zero crossing as soon
-       as we restart.  Two complementary defenses:
-         1. Advance the post-reset state by a tiny Euler half-step
-            (small_dt * der at the new state), pushing it off the
-            boundary in the direction the dynamics naturally take it.
-         2. Keep a `last_event_t' watchdog with a wider dedup window
-            so any residual re-detection after a bounce is rejected. */
+    /* Event loop.  For each segment [t_list[k-1], t_list[k]]:
+         repeatedly call np_cvode watching for zero crossings of any
+         event_expr.  When one fires:
+           1. Evaluate the user-supplied guard at the event time.  If
+              guard <= 0 (the original Modelica boolean isn't actually
+              true), treat it as a spurious detection — advance past
+              the event and keep integrating without applying the reset.
+           2. Otherwise apply the reset rule.  Then take a tiny Euler
+              half-step in the natural direction of the dynamics to push
+              the post-reset state off the event boundary so CVODE's
+              rootfinder doesn't immediately re-detect the same zero
+              crossing.
+         Two backup defenses against Zeno-like loops:
+         - `last_event_t' watchdog rejects events within `event_dedup_eps'
+           of the previously accepted one.
+         - `iter < max_iters' bounds total iterations per segment. */
     block([current_state : x0_vec, k, max_iters,
            event_dedup_eps : 1.0e-3, last_event_t : -1.0e308,
            nudge_dt : 1.0e-4],
@@ -183,8 +221,8 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
       for k : 2 thru nt do block(
         [next_t : t_list[k], current_t : t_list[k - 1],
          iter : 0, sub_tspan, result, traj_seg, evs, ev,
-         t_ev, y_ev, ev_idx, nrows, accepted, post_state, der_now,
-         state_subst, j],
+         t_ev, y_ev, ev_idx, nrows, accepted, guard_val,
+         guard_subst, post_state, der_now, state_subst, j],
         max_iters : 100,
         while current_t < next_t and iter < max_iters do (
           iter : iter + 1,
@@ -203,26 +241,43 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
                                      i, 1, n),
             current_t : next_t
           ) else (
-            /* Event fired — apply reset, then nudge state forward by
-               an Euler half-step so the next CVODE call doesn't see
-               g(t) on the boundary. */
             ev : first(accepted),
             t_ev : ev[1],
             y_ev : ev[2],
             ev_idx : first(ev[3]),
-            post_state : mod__apply_reset(reset_rules[ev_idx + 1],
-                                           y_ev, t_ev, states,
-                                           param_subst),
-            state_subst : append([t = t_ev + nudge_dt],
-                                 makelist(states[j] = post_state[j],
+            /* Evaluate the guard at the event-time state.  If the
+               guard is `true', it short-circuits to 1 — the event
+               always fires.  Otherwise compute its numeric value and
+               only fire if positive. */
+            guard_subst : append([t = t_ev],
+                                 makelist(states[j] = y_ev[j],
                                           j, 1, n)),
-            der_now : map(lambda([e], float(subst(state_subst, e))),
-                          rhs_exprs),
-            current_state : makelist(post_state[j]
-                                      + nudge_dt * der_now[j],
-                                     j, 1, n),
-            current_t     : t_ev + nudge_dt,
-            last_event_t  : t_ev
+            guard_val   : if event_guards[ev_idx + 1] = true then 1.0
+                          else float(subst(guard_subst,
+                                           event_guards[ev_idx + 1])),
+            if guard_val > 0 then (
+              /* Real event: apply reset, take an Euler half-step to
+                 push the post-reset state off the boundary. */
+              post_state : mod__apply_reset(reset_rules[ev_idx + 1],
+                                             y_ev, t_ev, states,
+                                             param_subst),
+              state_subst : append([t = t_ev + nudge_dt],
+                                   makelist(states[j] = post_state[j],
+                                            j, 1, n)),
+              der_now : map(lambda([e], float(subst(state_subst, e))),
+                            rhs_exprs),
+              current_state : makelist(post_state[j]
+                                        + nudge_dt * der_now[j],
+                                       j, 1, n),
+              current_t     : t_ev + nudge_dt,
+              last_event_t  : t_ev
+            ) else (
+              /* Spurious detection — keep current state, advance past
+                 the boundary so we don't re-detect the same zero. */
+              current_state : y_ev,
+              current_t     : t_ev + nudge_dt,
+              last_event_t  : t_ev
+            )
           )),
         if iter >= max_iters then
           error("mod_simulate_nonlinear: too many events near t = ",

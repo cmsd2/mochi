@@ -68,7 +68,7 @@ mod_get(m, key) := block([pair, found],
 
 /* ---- Pretty-print -------------------------------------------------- */
 
-mod_print(m) := block([],
+mod_print(m) := block([events_or_err, ev],
   print("Model: ", mod_get(m, 'name)),
   print("  parameters: ", mod_get(m, 'params)),
   print("  states:     ", mod_get(m, 'states)),
@@ -79,6 +79,22 @@ mod_print(m) := block([],
   print("  residuals:"),
   for r in mod_get(m, 'residuals) do
     print("    ", r, " = 0"),
+  /* Events are optional: older models loaded before extraction support
+     don't have the field; continuous-only models have an empty list.
+     A compound condition like `h <= 0 and v < 0` registers one event
+     per primitive detector, all sharing the same reset and cond —
+     dedupe by (cond_pretty, reset_eqs) so the print is one line per
+     `when' clause, not one line per detector. */
+  events_or_err : errcatch(mod_get(m, 'events)),
+  if events_or_err # [] and length(events_or_err[1]) > 0 then block(
+    [seen : []],
+    print("  events:"),
+    for ev in events_or_err[1] do block([key : [ev[4], ev[2]]],
+      if not member(key, seen) then (
+        /* ev = [detector, reset_eqs, guard, cond_pretty];
+           show the user-facing original boolean, not the derived guard. */
+        print("    when ", ev[4], ": ", ev[2]),
+        seen : cons(key, seen)))),
   'done)$
 
 /* ---- State-space linearisation ------------------------------------ */

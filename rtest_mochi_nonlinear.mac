@@ -136,3 +136,77 @@ true;
 is(9.81 * x_b[1][1] + 0.5 * x_b[1][2]^2
    > 9.81 * last(x_b)[1] + 0.5 * last(x_b)[2]^2);
 true;
+
+/* ---- Auto-extracted events from `when` clauses ----
+   rumoca surfaces `when h <= 0 and v < 0 then reinit(v, -e * pre(v))'
+   in its f_z block; mochi-loader walks that and stores it in the
+   model's `events' field.  mod_simulate_nonlinear defaults to that
+   list, so the user doesn't have to re-specify what's already in the
+   .mo file.  Events: one tuple per primitive comparison (here `h <= 0'
+   and `v < 0'), all sharing the same reset and guard. */
+
+length(mod_get(m_ball, 'events));
+2;
+
+/* Each event tuple has 4 elements: [detector, reset_eqs, guard, cond_pretty]. */
+length(mod_get(m_ball, 'events)[1]);
+4;
+
+/* The reset equation matches the Modelica `reinit(v, -e * pre(v))' —
+   `pre(v)' simplifies to `v' since at event time the pre-event state
+   IS what CVODE reports.  Both events should share this same reset. */
+mod_get(m_ball, 'events)[1][2];
+[v = -e * v];
+
+mod_get(m_ball, 'events)[2][2];
+[v = -e * v];
+
+/* The guard preserves the full conjunction faithfully: min(-h, -v).
+   Positive iff both `h <= 0' AND `v < 0'. */
+mod_get(m_ball, 'events)[1][3];
+min(-h, -v);
+
+/* Auto-extraction default: simulating with no `'events` arg should
+   match the explicit-events trajectory exactly. */
+([t_auto, x_auto] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],
+                                            lambda([t], []),
+                                            5.0,
+                                            ['return = 'states, 'dt = 0.05]),
+ true);
+true;
+
+is(lmin(map(first, x_auto)) > -0.01);
+true;
+
+/* Opt-out: 'events = [] disables event handling entirely.  Without
+   the bounce, the ball flies through the floor — h(5) ≈ -113. */
+([t_off, x_off] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],
+                                          lambda([t], []),
+                                          5.0,
+                                          ['return = 'states,
+                                           'events = []]),
+ true);
+true;
+
+is(last(x_off)[1] < -100);
+true;
+
+/* User override: bounce 0.5 m above the floor instead. */
+([t_ovr, x_ovr] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],
+                                          lambda([t], []),
+                                          5.0,
+                                          ['return = 'states, 'dt = 0.05,
+                                           'events = [[h - 0.5,
+                                                       [v = -0.8 * v]]]]),
+ true);
+true;
+
+is(lmin(map(first, x_ovr)) > 0.4);
+true;
+
+/* Continuous-only models have no events. */
+(m_rlc_ev : mod_load("examples/RLCircuit.mo"), true);
+true;
+
+length(mod_get(m_rlc_ev, 'events));
+0;

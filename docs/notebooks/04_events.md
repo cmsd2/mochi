@@ -53,6 +53,8 @@ mod_print(m)$
       residuals:
          der_h-v  = 0
          g+der_v  = 0
+      events:
+        when  h <= 0 and v < 0 :  [v = -(e*v)]
 
 Notice the residuals are continuous-only — `der_h - v = 0` and `g + der_v = 0`. The `when` clause is *not* in the residual list; it lives in rumoca's discrete `f_z` block, which mochi exposes through the `'events` opt of `mod_simulate_nonlinear` rather than through the continuous DAE.
 
@@ -83,7 +85,8 @@ To start, simulate without the event handling — just continuous free fall. The
   mod_simulate_nonlinear(m, [10.0, 0.0],
                          lambda([t], []),
                          5.0,
-                         ['return = 'states])$
+                         ['return = 'states,
+                          'events = []])$  /* opt out — ignore the when clause */
 
 ax_draw2d(
   color="gray", line_width=2, name="h(t) — no events",
@@ -106,12 +109,15 @@ By $t=5$ the ball is more than 100 m below ground — physically meaningless wit
 
 ## 4. With events: the ball bounces
 
-Now wire up the event. We pass a single `[event_expr, reset_eqs]` pair to `mod_simulate_nonlinear`:
+By default, `mod_simulate_nonlinear` uses the events auto-extracted from the model's `when` clause — see the `events:` line printed by `mod_print` above. The single `when h <= 0 and v < 0 then reinit(v, -e * pre(v)) end when;` declaration in `BouncingBall.mo` becomes:
 
-- `event_expr = h` — CVODE detects each zero crossing of $h$ (i.e. the moments the ball reaches ground level).
-- `reset_eqs = [v = -e * v]` — at each event, replace velocity with $-e \cdot v_{\text{pre}}$, applying the coefficient of restitution.
+- A list of **detector** expressions (one per primitive comparison: `h` for `h <= 0`, `v` for `v < 0`) that CVODE's rootfinder watches.
+- A **reset** rule `[v = -e * v]` (the `pre(v)` was simplified — at event time `pre(v) = v`).
+- A **guard** `min(-h, -v)` that's positive iff the original conjunction `h <= 0 AND v < 0` holds.
 
-The integrator loop runs CVODE between requested sample times; whenever a zero-crossing fires, it stops, applies the reset, and restarts from the post-reset state.
+When CVODE detects a zero crossing of any detector, the loop evaluates the guard at the event-time state. If `guard > 0`, the reset fires and integration restarts. If `guard <= 0`, the detection is treated as spurious (e.g. the post-bounce state is at $h = 0$ but with $v > 0$, so `v < 0` fails — no second reset). This is exactly what the user's compound `when` clause meant.
+
+To call `mod_simulate_nonlinear` with auto-extracted events, just don't pass the `'events` opt:
 
 
 ```maxima
@@ -119,22 +125,28 @@ The integrator loop runs CVODE between requested sample times; whenever a zero-c
   mod_simulate_nonlinear(m, [10.0, 0.0],
                          lambda([t], []),
                          5.0,
-                         ['return = 'states,
-                          'events = [[h, [v = -e * v]]]])$
+                         ['return = 'states])$
+/* No 'events arg — mod_simulate_nonlinear uses the events
+   auto-extracted from the model's `when' clause (see mod_print). */
 
 ax_draw2d(
   color="red", line_width=2, name="h(t) — with bouncing event",
   lines(t_evt, map(first, x_evt)),
   color="black", dash="dot", explicit(0, t, 0, 5),
-  title="Bouncing ball — with `when h <= 0 then reinit(v, -e*v)`",
+  title="Bouncing ball — with `when h <= 0 and v < 0 then reinit(v, -e*v)`",
   xlabel="t (s)", ylabel="h (m)",
   grid=true, showlegend=true
 )$
 ```
 
+    rat: replaced 9.020562075079397e-17 by 1/11085783698142760 = 9.020562075079397e-17
+    rat: replaced -6.399996859055943 by -29749003/4648284 = -6.399996859055944
+    rat: replaced 1.547373340571312e-15 by 1/646256448770654 = 1.5473733405713123e-15
+    rat: replaced -4.095996240419254 by -32527580/7941311 = -4.095996240419246
+
 
     
-![svg](04_events_files/04_events_12_0.svg)
+![svg](04_events_files/04_events_12_1.svg)
     
 
 
@@ -170,11 +182,17 @@ The phase trajectory spirals inward: each bounce loses 36% of the kinetic energy
 
 ## What we got
 
-`mod_simulate_nonlinear`'s `'events` opt is the bridge between Modelica's `when (condition) then reinit(state, expr) end when` clauses and SUNDIALS CVODE's rootfinding. The user supplies pairs of `[event_expr, reset_eqs]`; the integrator loop:
+mochi auto-extracts `when` clauses from rumoca's `f_z` block straight into the model struct's `events` field, so writing the event handling in the .mo file is enough — `mod_simulate_nonlinear` picks it up by default. `mod_print` shows what was extracted.
 
-1. Calls `np_cvode` over `[current_t, next_t]` with `event_expr` as a CVODE root function.
-2. If a zero crossing fires, evaluates `reset_eqs` against the state at the event to compute the new state.
-3. Nudges the post-reset state forward by a tiny Euler half-step (so CVODE doesn't immediately re-detect the same zero crossing on the boundary).
-4. Restarts and continues.
+Internally each event tuple is `[detector, reset_eqs, guard]`:
 
-The same machinery handles ideal diodes, threshold-triggered controllers, gearbox shifts, comparator-based hysteresis, and any other plant whose state takes a discontinuous step at well-defined moments.
+- **Detector** — a real-valued expression whose zero crossings CVODE's rootfinder watches.
+- **Reset** — the list of state-reset equations (with `pre(...)` simplified — at event time `pre(v) = v` since CVODE returns the pre-event state).
+- **Guard** — a real-valued expression that's positive iff the original Modelica boolean condition is true. Compound conditions with `and`/`or` are translated faithfully (`min` for `and`, `max` for `or`); each primitive comparison registers its own detector, all sharing the same guard, so any one firing re-evaluates the full boolean.
+
+The same machinery handles ideal diodes, threshold-triggered controllers, gearbox shifts, comparator-based hysteresis — anything Modelica expresses with `when`.
+
+Override or opt out:
+
+- `mod_simulate_nonlinear(m, x0, u, t_end, ['events = []])` — ignore the `when` clause entirely (pure continuous integration, like Section 3 above).
+- `mod_simulate_nonlinear(m, x0, u, t_end, ['events = [[g_expr, reset_eqs, guard], ...]])` — supply your own list, e.g. for plants where the event extraction can't represent a complex condition (`or`s of nested function calls, etc.) or for what-if analyses (bounce 0.5 m above the floor, etc.).
