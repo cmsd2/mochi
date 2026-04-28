@@ -1,0 +1,48 @@
+/* Tests for the mochi package.
+
+   These tests assume rumoca is on $PATH (or RUMOCA_BIN is set) and that
+   tests are run from the package root, so the example .mo files and the
+   tools/ helper are at known relative paths. */
+
+(load("mochi"), true);
+true;
+
+/* Locate the helper script — tests run from package root */
+(mod__helper_path : "tools/rumoca_to_mac.py", true);
+true;
+
+/* Load the RLC example and verify the basic structure */
+(m_rlc : mod_load("examples/RLCircuit.mo"), true);
+true;
+
+mod_get(m_rlc, 'name);
+"RLCircuit";
+
+length(mod_get(m_rlc, 'states));
+2;
+
+length(mod_get(m_rlc, 'inputs));
+1;
+
+length(mod_get(m_rlc, 'outputs));
+1;
+
+length(mod_get(m_rlc, 'params));
+3;
+
+/* State-space at the origin with default parameters */
+([A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);
+true;
+
+/* For default R=1, L=0.5, C=1: A = [[-2, -2], [1, 0]] */
+A;
+matrix([-2.0, -2.0], [1.0, 0.0]);
+
+B;
+matrix([2.0], [0.0]);
+
+C;
+matrix([0.0, 1.0]);
+
+D;
+matrix([0.0]);

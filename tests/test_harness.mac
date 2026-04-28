@@ -1,0 +1,92 @@
+/* test_harness.mac -- snapshot/rollback isolation for multi-file test wrappers.
+ *
+ * Maxima's batch() shares a single session across files, so variables,
+ * functions and options defined in one file leak into the next.  This
+ * harness captures user-namespace state before each file and restores it
+ * afterwards, letting you keep the package under test loaded exactly once.
+ *
+ * Usage in a wrapper file (e.g. rtest_sample.mac):
+ *
+ *   (load("sample"), true);
+ *   true;
+ *
+ *   load("tests/test_harness")$
+ *   mxpm_run_tests("tests/test_a.mac",
+ *                  "tests/test_b.mac",
+ *                  "tests/test_c.mac")$
+ *
+ * Each file is still executed under batch(f, test), so the familiar
+ * "M/N tests passed" summary lines are emitted per file.
+ *
+ * Scope of isolation:
+ *   - user-defined values, functions, arrays, macros, rules, aliases,
+ *     props and dependencies created during a test file are kill()ed
+ *   - option variables (display2d, float, numer, linel, ...) are restored
+ *     via reset() between files
+ *
+ * Known limitation: if a test REDEFINES a symbol that already existed
+ * before the file ran (e.g. a function from the package under test), the
+ * redefinition is not rolled back -- the name was already in the snapshot.
+ * Tests that intentionally redefine package symbols should kill() them
+ * at the end of the file.
+ */
+
+mxpm__snapshot() := [
+  copylist(values),
+  copylist(functions),
+  copylist(arrays),
+  copylist(macros),
+  copylist(rules),
+  copylist(aliases),
+  copylist(props),
+  copylist(dependencies)
+]$
+
+/* Reduce a diff entry to its killable name.  `functions' and `macros' hold
+ * signature forms like f(x) and h(x,y); arrays/dependencies may too.
+ * kill() wants the bare symbol, so fall through op() when the entry is
+ * compound.
+ */
+mxpm__kill_name(s) := if atom(s) then s else op(s)$
+
+/* All loop and scratch variables are declared in block([...]) locals AND
+ * are namespaced with an mxpm__ prefix.  This matters: Maxima binds `for x
+ * in list' variables dynamically, so a plain `for f in files' would leak
+ * `f' into every nested batch() call and shadow any test that defines
+ * f(x) := ... -- the test would see the current filename string instead
+ * of being able to redefine f.
+ */
+mxpm__rollback(snap) := block(
+  [mxpm__lists, mxpm__new, mxpm__i, mxpm__s],
+  mxpm__new: [],
+  mxpm__lists: [values, functions, arrays, macros, rules,
+                aliases, props, dependencies],
+  for mxpm__i: 1 thru length(snap) do
+    mxpm__new: append(mxpm__new,
+                      sublist(mxpm__lists[mxpm__i],
+                              lambda([x], not member(x, snap[mxpm__i])))),
+  /* Kill one at a time under errcatch so one awkward entry does not
+   * derail the whole rollback.  kill() is a quote-arg function, so we
+   * reach it via apply() to get our computed name evaluated before the
+   * call -- otherwise kill() tries to kill the literal form
+   * `mxpm__kill_name(...)' and errors. */
+  for mxpm__s in mxpm__new do
+    errcatch(apply(kill, [mxpm__kill_name(mxpm__s)])),
+  errcatch(reset()),
+  'done)$
+
+/* mxpm_run_tests(file1, file2, ...)
+ *
+ * Takes filenames as a rest-arg list.  For each file:
+ *   1. Snapshot current user namespace.
+ *   2. Run batch(file, test), catching errors so one bad file does not
+ *      abort the rest of the suite.
+ *   3. Kill any newly-defined user symbols and reset() option variables.
+ */
+mxpm_run_tests([files]) := block(
+  [mxpm__snap, mxpm__file],
+  for mxpm__file in files do (
+    mxpm__snap: mxpm__snapshot(),
+    errcatch(batch(mxpm__file, test)),
+    mxpm__rollback(mxpm__snap)),
+  'done)$

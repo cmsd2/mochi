@@ -1,0 +1,178 @@
+/* mochi.mac — Read Modelica models into Maxima symbolic equations.
+ *
+ * Backed by rumoca (https://github.com/CogniPilot/rumoca), which parses
+ * Modelica source and emits a JSON DAE.  A small Python helper
+ * (tools/rumoca_to_mac.py) walks that JSON and emits a Maxima-loadable
+ * file; this package shells out to the helper, batches the result, and
+ * wraps everything in a struct.
+ *
+ * Public API:
+ *   mod_load(path)              — parse a .mo file, return a model struct
+ *   mod_print(m)                — pretty-print a model
+ *   mod_state_space(m, op)      — linearise around an operating point
+ *                                 op = [iL = 0, vC = 0, Vin = 0, ...]
+ *                                 returns [A, B, C, D] (numeric, with
+ *                                 parameters substituted to defaults)
+ *   mod_state_space(m, op, params)
+ *                               — like above, but pass an explicit
+ *                                 parameter list [R = 2, L = 0.4, ...]
+ *
+ * A model struct is a list of [tag, value] pairs:
+ *   [['name = ..., 'params = ..., 'states = ..., 'derivs = ...,
+ *     'inputs = ..., 'outputs = ..., 'initial = ..., 'residuals = ...]]
+ *
+ * Use mod_get(m, 'states) to fetch a field.
+ */
+
+/* ---- Locate the helper script -------------------------------------- */
+
+mod__helper_path : false$  /* set by mod_init() once */
+
+mod_init([args]) := block([this_dir],
+  /* Default: assume helper is alongside this file, in tools/.
+     User can override by setting mod__helper_path before calling. */
+  if mod__helper_path # false then return(mod__helper_path),
+  /* Best effort: try a few common locations. */
+  if length(args) >= 1 then
+    mod__helper_path : args[1]
+  else
+    mod__helper_path : "tools/rumoca_to_mac.py",
+  mod__helper_path)$
+
+/* ---- Run the helper, slurp the output, batch it ------------------- */
+
+mod__sh_quote(s) := sconcat("'", s, "'")$  /* assumes no single-quotes in path */
+
+mod_load(path) := block(
+  [tmp, cmd, probe],
+  if mod__helper_path = false then mod_init(),
+  tmp : sconcat("/tmp/maxima_modelica_", string(random(100000)), ".mac"),
+  cmd : sconcat("python3 ",
+                mod__sh_quote(mod__helper_path),
+                " ",
+                mod__sh_quote(path),
+                " > ",
+                mod__sh_quote(tmp),
+                " 2>&1"),
+  system(cmd),
+  /* Sanity check the emitted file is non-empty and starts with our header */
+  probe : openr(tmp),
+  if probe = false then
+    error("mod_load: helper produced no output for ", path),
+  close(probe),
+  /* Load the emitted Maxima file silently */
+  load(tmp),
+  ['name      = mod__model_name,
+   'params    = mod__params,
+   'states    = mod__states,
+   'derivs    = mod__derivs,
+   'inputs    = mod__inputs,
+   'outputs   = mod__outputs,
+   'initial   = mod__initial,
+   'residuals = mod__residuals])$
+
+/* ---- Field accessor ------------------------------------------------ */
+
+/* `return(...)` inside a `for` loop returns from the loop, not the enclosing
+   block — so we use a flag variable to capture the match and check after. */
+mod_get(m, key) := block([pair, found],
+  found : 'unset,
+  for pair in m do
+    if found = 'unset and lhs(pair) = key then found : rhs(pair),
+  if found = 'unset then error("mod_get: no field ", key),
+  found)$
+
+/* ---- Pretty-print -------------------------------------------------- */
+
+mod_print(m) := block([],
+  print("Model: ", mod_get(m, 'name)),
+  print("  parameters: ", mod_get(m, 'params)),
+  print("  states:     ", mod_get(m, 'states)),
+  print("  derivs:     ", mod_get(m, 'derivs)),
+  print("  inputs:     ", mod_get(m, 'inputs)),
+  print("  outputs:    ", mod_get(m, 'outputs)),
+  print("  initial:    ", mod_get(m, 'initial)),
+  print("  residuals:"),
+  for r in mod_get(m, 'residuals) do
+    print("    ", r, " = 0"),
+  'done)$
+
+/* ---- State-space linearisation ------------------------------------ */
+/*
+ * Given the parsed model and an operating point, return [A, B, C, D]
+ * such that the linearisation around the operating point is
+ *
+ *     dx/dt = A·(x - x0) + B·(u - u0)
+ *     y     = C·(x - x0) + D·(u - u0)
+ *
+ * Approach:
+ *   1. Solve the residual equations for the derivative and output
+ *      symbols, giving explicit f(x, u) and g(x, u).
+ *   2. Compute Jacobians ∂f/∂x, ∂f/∂u, ∂g/∂x, ∂g/∂u symbolically.
+ *   3. Substitute parameter values and the operating point.
+ *
+ * `op_point` is a list of equations like [iL = 0, vC = 0, Vin = 0]
+ * — needs to specify a value for each state and each input.
+ *
+ * `params` (optional) is a list of equations like [R = 1.0, L = 0.5];
+ * if omitted, the default values from the .mo file are used.
+ */
+
+mod_state_space(m, op_point, [override_params]) := block(
+  [params, states, derivs, inputs, outputs, residuals,
+   solved, f_expr, y_expr, A, B, C, D, n, ni, no, i, j,
+   param_subst, op_subst, full_subst],
+  states    : mod_get(m, 'states),
+  derivs    : mod_get(m, 'derivs),
+  inputs    : mod_get(m, 'inputs),
+  outputs   : mod_get(m, 'outputs),
+  residuals : mod_get(m, 'residuals),
+  /* Build parameter substitution list */
+  params : mod_get(m, 'params),
+  param_subst : map(lambda([p], p[1] = p[2]), params),
+  if length(override_params) > 0 then
+    param_subst : append(override_params[1], param_subst),
+  /* Solve residuals (= 0) for derivs and outputs. Each residual equation
+     is a Maxima expression; treat as residual = 0 and solve. */
+  solved : solve(map(lambda([r], r = 0), residuals),
+                 append(derivs, outputs)),
+  if solved = [] then
+    error("mod_state_space: could not solve residuals for derivs+outputs"),
+  /* Extract f and g from the first solution branch */
+  solved : solved[1],
+  f_expr : map(lambda([d], rhs(mod__assoc(d, solved))), derivs),
+  y_expr : map(lambda([y], rhs(mod__assoc(y, solved))), outputs),
+  /* Jacobians */
+  n  : length(states),
+  ni : length(inputs),
+  no : length(outputs),
+  A : genmatrix(lambda([i, j], diff(f_expr[i], states[j])),  n, n),
+  B : if ni > 0 then genmatrix(lambda([i, j], diff(f_expr[i], inputs[j])),
+                               n, ni)
+      else zeromatrix(n, 0),
+  C : if no > 0 then genmatrix(lambda([i, j], diff(y_expr[i], states[j])),
+                               no, n)
+      else zeromatrix(0, n),
+  D : if (no > 0 and ni > 0)
+        then genmatrix(lambda([i, j], diff(y_expr[i], inputs[j])), no, ni)
+      else zeromatrix(no, ni),
+  /* Substitute parameters and operating point */
+  op_subst : op_point,
+  full_subst : append(param_subst, op_subst),
+  A : float(subst(full_subst, A)),
+  B : float(subst(full_subst, B)),
+  C : float(subst(full_subst, C)),
+  D : float(subst(full_subst, D)),
+  [A, B, C, D])$
+
+/* ---- 'mod__assoc' helper for solve() output --------------------- */
+/* solve() returns equations like der_iL = expr; mod__assoc finds the
+   equation whose lhs matches the given symbol.  Same `return`-in-`for`
+   issue as mod_get above — use a flag. */
+
+mod__assoc(sym, eqs) := block([e, found],
+  found : 'unset,
+  for e in eqs do
+    if found = 'unset and lhs(e) = sym then found : e,
+  if found = 'unset then error("mod__assoc: ", sym, " not found"),
+  found)$

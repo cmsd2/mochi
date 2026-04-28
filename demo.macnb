@@ -1,0 +1,191 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 5,
+  "metadata": {
+    "kernelspec": {
+      "name": "maxima",
+      "display_name": "Maxima",
+      "language": "maxima"
+    },
+    "aximar": {}
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "source": "# mochi demo — Modelica → Maxima\n\n`mochi` is a Maxima package for reading Modelica models into symbolic state-space form.\nIt uses [rumoca](https://github.com/CogniPilot/rumoca) as a parsing backend.\n\nThis notebook walks the public API on three canonical plants:\n\n1. Series RLC circuit\n2. DC motor\n3. Double tank\n\nEach is loaded from a `.mo` file, pretty-printed, and linearised around an operating point.\n",
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": "/* Load the package and tell it where the helper script is.\n   In a normal install (mxpm install mochi), the helper path is auto-resolved. */\nload(\"./mochi.mac\")$\nmod__helper_path : \"tools/rumoca_to_mac.py\"$",
+      "metadata": {},
+      "execution_count": 1,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": "## 1. RLC circuit\n\nA series RLC driven by a voltage source. States: inductor current $i_L$, capacitor voltage $v_C$.\nOutput: capacitor voltage.",
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": "m_rlc : mod_load(\"examples/RLCircuit.mo\")$\nmod_print(m_rlc)$",
+      "metadata": {},
+      "execution_count": 2,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "Model:  RLCircuit\n  parameters:  [[R,1.0],[L,0.5],[Ccap,1.0]]\n  states:      [iL,vC]\n  derivs:      [der_iL,der_vC]\n  inputs:      [Vin]\n  outputs:     [y]\n  initial:     [[iL,0],[vC,0]]\n  residuals:\n     vC+R*iL+L*der_iL-Vin  = 0\n     Ccap*der_vC-iL  = 0\n     y-vC  = 0"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": "Linearise at the equilibrium $i_L = v_C = V_{in} = 0$:",
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": "[A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$\nprint(\"A =\")$ A;\nprint(\"B =\")$ B;\nprint(\"C =\")$ C;\nprint(\"D =\")$ D;",
+      "metadata": {},
+      "execution_count": 3,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "A =\nmatrix([-2.0,-2.0],[1.0,0.0])\nB =\nmatrix([2.0],[0.0])\nC =\nmatrix([0.0,1.0])\nD ="
+          ]
+        },
+        {
+          "data": {
+            "text/latex": [
+              "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi 0.0\\cr\\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
+            ]
+          },
+          "execution_count": 3,
+          "metadata": {},
+          "output_type": "execute_result"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": "With default parameters $R=1, L=0.5, C=1$, the closed-form is\n\n$$A = \\begin{pmatrix} -R/L & -1/L \\\\ 1/C & 0 \\end{pmatrix} = \\begin{pmatrix} -2 & -2 \\\\ 1 & 0 \\end{pmatrix}, \\quad B = \\begin{pmatrix} 1/L \\\\ 0 \\end{pmatrix} = \\begin{pmatrix} 2 \\\\ 0 \\end{pmatrix}.$$\n\nOverride parameters to verify:",
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": "[A2, B2, C2, D2] : mod_state_space(m_rlc,\n                                          [iL = 0, vC = 0, Vin = 0],\n                                          [R = 2, L = 0.4, Ccap = 0.5])$\nprint(\"A with R=2, L=0.4, C=0.5:\")$ A2;\nprint(\"(closed form: [[-5, -2.5], [2, 0]])\")$",
+      "metadata": {},
+      "execution_count": 4,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "A with R=2, L=0.4, C=0.5:\nmatrix([-5.0,-2.5],[2.0,0.0])\n(closed form: [[-5, -2.5], [2, 0]])"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": "## 2. DC motor\n\nArmature current $i_a$, angular speed $\\omega$. Input: armature voltage $v_a$. Output: speed.",
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": "m_motor : mod_load(\"examples/DCMotor.mo\")$\nmod_print(m_motor)$",
+      "metadata": {},
+      "execution_count": 5,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "Model:  DCMotor\n  parameters:  [[Ra,1.0],[La,0.01],[Kt,0.05],[Ke,0.05],[Jm,0.001],[Bv,1.0e-4]]\n  states:      [ia,omega]\n  derivs:      [der_ia,der_omega]\n  inputs:      [va]\n  outputs:     [y]\n  initial:     [[ia,0],[omega,0]]\n  residuals:\n     -va+Ke*omega+Ra*ia+La*der_ia  = 0\n     Bv*omega-Kt*ia+Jm*der_omega  = 0\n     y-omega  = 0"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": "[Am, Bm, Cm, Dm] : mod_state_space(m_motor, [ia = 0, omega = 0, va = 0])$\nprint(\"DC motor A =\")$ Am;\nprint(\"DC motor B =\")$ Bm;",
+      "metadata": {},
+      "execution_count": 6,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "DC motor A =\nmatrix([-100.0,-5.0],[50.0,-0.1])\nDC motor B ="
+          ]
+        },
+        {
+          "data": {
+            "text/latex": [
+              "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi 100.0\\cr 0.0\\cr\\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
+            ]
+          },
+          "execution_count": 6,
+          "metadata": {},
+          "output_type": "execute_result"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": "## 3. Double tank cascade\n\nTwo tanks, gravity flow with linear outlet coefficients.",
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": "m_tank : mod_load(\"examples/DoubleTank.mo\")$\nmod_print(m_tank)$",
+      "metadata": {},
+      "execution_count": 7,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "Model:  DoubleTank\n  parameters:  [[A1,1.0],[A2,1.0],[k1,0.5],[k2,0.3]]\n  states:      [h1,h2]\n  derivs:      [der_h1,der_h2]\n  inputs:      [q_in]\n  outputs:     [y]\n  initial:     [[h1,0],[h2,0]]\n  residuals:\n     -q_in+h1*k1+A1*der_h1  = 0\n     h2*k2-h1*k1+A2*der_h2  = 0\n     y-h2  = 0"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": "[At, Bt, Ct, Dt] : mod_state_space(m_tank, [h1 = 0, h2 = 0, q_in = 0])$\nprint(\"Double-tank A =\")$ At;\nprint(\"Double-tank B =\")$ Bt;",
+      "metadata": {},
+      "execution_count": 8,
+      "outputs": [
+        {
+          "name": "stdout",
+          "output_type": "stream",
+          "text": [
+            "Double-tank A =\nmatrix([-0.5,0.0],[0.5,-0.3])\nDouble-tank B ="
+          ]
+        },
+        {
+          "data": {
+            "text/latex": [
+              "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi 1.0\\cr 0.0\\cr\\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
+            ]
+          },
+          "execution_count": 8,
+          "metadata": {},
+          "output_type": "execute_result"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": "## What we got\n\n`mod_load` parses a `.mo` file via rumoca and builds a Maxima struct with parameters,\nstates, inputs, outputs, and residual equations. `mod_state_space` symbolically solves\nthe residuals for derivatives + outputs, computes Jacobians, substitutes parameters and\noperating point, and returns numeric `[A, B, C, D]` matrices ready to feed into LQR,\nKalman, MPC, etc.\n\nThe current scope is the *flat single-model* subset of Modelica.  Connector models,\n`extends` inheritance, and discrete events are on the roadmap.",
+      "metadata": {}
+    }
+  ]
+}

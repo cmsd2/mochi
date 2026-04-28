@@ -1,0 +1,61 @@
+name: Deploy docs to GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texinfo pandoc
+
+      - name: Install mdbook
+        run: |
+          gh release download --repo rust-lang/mdBook --pattern 'mdbook-*-x86_64-unknown-linux-gnu.tar.gz'
+          tar xzf mdbook-*-x86_64-unknown-linux-gnu.tar.gz
+          sudo mv mdbook /usr/local/bin/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Install mxpm
+        run: |
+          gh release download --repo cmsd2/maxima-mxpm --pattern 'mxpm-x86_64-unknown-linux-gnu.tar.gz'
+          tar xzf mxpm-x86_64-unknown-linux-gnu.tar.gz
+          sudo mv mxpm /usr/local/bin/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build docs
+        run: mxpm doc build --mdbook
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/book/book
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
