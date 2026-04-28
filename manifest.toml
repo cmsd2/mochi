@@ -5,6 +5,7 @@ description = "Read Modelica models into Maxima symbolic equations via rumoca"
 license = "MIT"
 entry = "mochi.mac"
 doc = "doc/mochi.md"
+repository = "https://github.com/cmsd2/mochi"
 keywords = ["modelica", "control-systems", "state-space", "rumoca", "dae"]
 
 [test]
