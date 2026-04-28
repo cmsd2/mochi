@@ -197,6 +197,7 @@ that walk through the workflow end-to-end. Rendered markdown copies
 - [`01_linear_analysis`](docs/notebooks/01_linear_analysis.md) — load a `.mo` file, linearise around an operating point, run step/impulse/transfer-function analysis on RLCircuit, DCMotor, and DoubleTank, then compose two RLCs in cascade.
 - [`02_multi_component`](docs/notebooks/02_multi_component.md) — multi-instance composition (TwoTanks via direct equations, RCFilter via `connect(...)`) and dataflow-diagram rendering with `mod_diagram`.
 - [`03_nonlinear`](docs/notebooks/03_nonlinear.md) — direct nonlinear simulation via the `mochi-nonlinear` subsystem, with the Pendulum showing where the linearised model and the true `sin(theta)` dynamics visibly diverge.
+- [`04_events`](docs/notebooks/04_events.md) — discrete events / hybrid systems via Modelica's `when` clauses. The bouncing ball: continuous free-fall + a discontinuous velocity reset when the ball hits the floor. Includes the linearised dataflow diagram (continuous part), trajectory plots with and without event handling, and a phase portrait showing the velocity jumps as vertical edges at $h = 0$.
 
 To regenerate the markdown after editing a notebook:
 
