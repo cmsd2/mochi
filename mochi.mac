@@ -1,10 +1,10 @@
 /* mochi.mac — Read Modelica models into Maxima symbolic equations.
  *
  * Backed by rumoca (https://github.com/CogniPilot/rumoca), which parses
- * Modelica source and emits a JSON DAE.  A small Python helper
- * (tools/rumoca_to_mac.py) walks that JSON and emits a Maxima-loadable
- * file; this package shells out to the helper, batches the result, and
- * wraps everything in a struct.
+ * Modelica source and emits a JSON DAE.  mochi-loader.lisp shells out to
+ * rumoca, parses the JSON via cl-json, walks the AST, and constructs a
+ * Maxima struct directly — no Python helper, no temp .mac file, and no
+ * Maxima-side eval pass that could disturb session state.
  *
  * Public API:
  *
@@ -36,62 +36,16 @@
  *
  * Use mod_get(m, 'states) to fetch a field.
  *
- * Caveat: mod_load() emits a kill(...) of every parameter, state, derivative,
- * input, and output symbol before binding them.  This prevents user variables
- * in the session that share a name with a model parameter (e.g. `A2`) from
- * substituting their value into the model.  As a side effect, mod_load() will
- * erase any pre-existing global binding of those names.
+ * Note: mod_load constructs the model struct directly in Lisp with fresh
+ * symbol objects, so loading a model does NOT touch the global value of any
+ * symbol.  User session bindings are preserved across mod_load calls.
  */
 
 /* mochi depends on the numerics package (ndarray, np_expm, np_matmul, ...) */
 load("numerics")$
 
-/* ---- Locate the helper script -------------------------------------- */
-
-mod__helper_path : false$  /* set by mod_init() once */
-
-mod_init([args]) := block([this_dir],
-  /* Default: assume helper is alongside this file, in tools/.
-     User can override by setting mod__helper_path before calling. */
-  if mod__helper_path # false then return(mod__helper_path),
-  /* Best effort: try a few common locations. */
-  if length(args) >= 1 then
-    mod__helper_path : args[1]
-  else
-    mod__helper_path : "tools/rumoca_to_mac.py",
-  mod__helper_path)$
-
-/* ---- Run the helper, slurp the output, batch it ------------------- */
-
-mod__sh_quote(s) := sconcat("'", s, "'")$  /* assumes no single-quotes in path */
-
-mod_load(path) := block(
-  [tmp, cmd, probe],
-  if mod__helper_path = false then mod_init(),
-  tmp : sconcat("/tmp/maxima_modelica_", string(random(100000)), ".mac"),
-  cmd : sconcat("python3 ",
-                mod__sh_quote(mod__helper_path),
-                " ",
-                mod__sh_quote(path),
-                " > ",
-                mod__sh_quote(tmp),
-                " 2>&1"),
-  system(cmd),
-  /* Sanity check the emitted file is non-empty and starts with our header */
-  probe : openr(tmp),
-  if probe = false then
-    error("mod_load: helper produced no output for ", path),
-  close(probe),
-  /* Load the emitted Maxima file silently */
-  load(tmp),
-  ['name      = mod__model_name,
-   'params    = mod__params,
-   'states    = mod__states,
-   'derivs    = mod__derivs,
-   'inputs    = mod__inputs,
-   'outputs   = mod__outputs,
-   'initial   = mod__initial,
-   'residuals = mod__residuals])$
+/* The Lisp side defines $mod_load, which becomes mod_load on the Maxima side. */
+load("mochi-loader.lisp")$
 
 /* ---- Field accessor ------------------------------------------------ */
 

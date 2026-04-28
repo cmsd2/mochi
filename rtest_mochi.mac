@@ -1,14 +1,10 @@
 /* Tests for the mochi package.
 
-   These tests assume rumoca is on $PATH (or RUMOCA_BIN is set) and that
-   tests are run from the package root, so the example .mo files and the
-   tools/ helper are at known relative paths. */
+   These tests assume rumoca is on $PATH (or RUMOCA_BIN is set), and that
+   tests are run from the package root so the example .mo files are at the
+   expected relative paths. */
 
 (load("mochi"), true);
-true;
-
-/* Locate the helper script — tests run from package root */
-(mod__helper_path : "tools/rumoca_to_mac.py", true);
 true;
 
 /* Load the RLC example and verify the basic structure */

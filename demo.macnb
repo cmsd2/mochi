@@ -17,9 +17,9 @@
     },
     {
       "cell_type": "code",
-      "source": "/* Load the package and tell it where the helper script is. */\nload(\"./mochi.mac\")$\nmod__helper_path : \"tools/rumoca_to_mac.py\"$\nload(\"numerics\")$\nload(\"ax-plots\")$\n\n/* Step-response simulator. Uses proper ZOH discretisation:\n     B_d = A^{-1}(e^{A·dt} - I) B,\n   so the discrete steady state matches the continuous one. */\nsim_step(A_, B_, C_, dt, nt) := block(\n  [n, A_nd, B_nd, C_nd, eAdt, B_disc, x, y_list, k],\n  A_nd : ndarray(float(A_)),\n  B_nd : ndarray(float(B_)),\n  C_nd : ndarray(float(C_)),\n  n : first(np_shape(A_nd)),\n  eAdt : np_expm(np_scale(dt, A_nd)),\n  B_disc : np_matmul(np_inv(A_nd),\n                     np_matmul(np_sub(eAdt, np_eye(n)), B_nd)),\n  x : np_zeros([n, 1]),\n  y_list : [],\n  for k : 1 thru nt do (\n    y_list : endcons(np_ref(np_matmul(C_nd, x), 0, 0), y_list),\n    x : np_add(np_matmul(eAdt, x), B_disc)),\n  y_list)$\n\n/* Pole locations (eigenvalues of A) */\npoles_of(A_) := block([evals, _, lst],\n  [evals, _] : np_eig(ndarray(float(A_))),\n  lst : np_to_list(evals),\n  [map(realpart, lst), map(imagpart, lst)])$",
+      "source": "/* Load the package and tell it where the helper script is. */\nload(\"./mochi.mac\")$\nload(\"numerics\")$\nload(\"ax-plots\")$\n\n/* Step-response simulator. Uses proper ZOH discretisation:\n     B_d = A^{-1}(e^{A·dt} - I) B,\n   so the discrete steady state matches the continuous one. */\nsim_step(A_, B_, C_, dt, nt) := block(\n  [n, A_nd, B_nd, C_nd, eAdt, B_disc, x, y_list, k],\n  A_nd : ndarray(float(A_)),\n  B_nd : ndarray(float(B_)),\n  C_nd : ndarray(float(C_)),\n  n : first(np_shape(A_nd)),\n  eAdt : np_expm(np_scale(dt, A_nd)),\n  B_disc : np_matmul(np_inv(A_nd),\n                     np_matmul(np_sub(eAdt, np_eye(n)), B_nd)),\n  x : np_zeros([n, 1]),\n  y_list : [],\n  for k : 1 thru nt do (\n    y_list : endcons(np_ref(np_matmul(C_nd, x), 0, 0), y_list),\n    x : np_add(np_matmul(eAdt, x), B_disc)),\n  y_list)$\n\n/* Pole locations (eigenvalues of A) */\npoles_of(A_) := block([evals, _, lst],\n  [evals, _] : np_eig(ndarray(float(A_))),\n  lst : np_to_list(evals),\n  [map(realpart, lst), map(imagpart, lst)])$",
       "metadata": {},
-      "execution_count": 1,
+      "execution_count": 19,
       "outputs": []
     },
     {
@@ -31,7 +31,7 @@
       "cell_type": "code",
       "source": "m_rlc : mod_load(\"examples/RLCircuit.mo\")$\nmod_print(m_rlc)$",
       "metadata": {},
-      "execution_count": 2,
+      "execution_count": 20,
       "outputs": [
         {
           "name": "stdout",
@@ -51,7 +51,7 @@
       "cell_type": "code",
       "source": "[A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$\nprint(\"A =\")$ A;\nprint(\"B =\")$ B;\nprint(\"C =\")$ C;\nprint(\"D =\")$ D;",
       "metadata": {},
-      "execution_count": 3,
+      "execution_count": 21,
       "outputs": [
         {
           "name": "stdout",
@@ -66,7 +66,7 @@
               "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi 0.0\\cr\\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
             ]
           },
-          "execution_count": 3,
+          "execution_count": 21,
           "metadata": {},
           "output_type": "execute_result"
         }
@@ -81,7 +81,7 @@
       "cell_type": "code",
       "source": "dt : 0.05$ nt : 300$\nt_sim : makelist(i * dt, i, 0, nt - 1)$\ny_rlc : sim_step(A, B, C, dt, nt)$\n\nax_draw2d(\n  color=\"blue\", line_width=2, name=\"vC(t)\",\n  lines(t_sim, y_rlc),\n  color=\"black\", dash=\"dot\", explicit(1, t, 0, last(t_sim)),\n  title=\"RLC step response (default R=1, L=0.5, C=1)\",\n  xlabel=\"Time (s)\", ylabel=\"vC\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 4,
+      "execution_count": 22,
       "outputs": [
         {
           "data": {
@@ -103,7 +103,7 @@
       "cell_type": "code",
       "source": "[re_p, im_p] : poles_of(A)$\nax_draw2d(\n  marker_size=10, color=\"red\", name=\"poles\",\n  points(re_p, im_p),\n  color=\"gray\", dash=\"dash\", explicit(0, t, -3, 1),\n  title=\"RLC pole locations (eigenvalues of A)\",\n  xlabel=\"Re\", ylabel=\"Im\",\n  grid=true, aspect_ratio=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 5,
+      "execution_count": 23,
       "outputs": [
         {
           "data": {
@@ -125,7 +125,7 @@
       "cell_type": "code",
       "source": "[A2, B2, C2, D2] : mod_state_space(m_rlc,\n                                          [iL = 0, vC = 0, Vin = 0],\n                                          [R = 2, L = 0.4, Ccap = 0.5])$\nprint(\"A =\")$ A2;\ny_rlc2 : sim_step(A2, B2, C2, dt, nt)$\nax_draw2d(\n  color=\"blue\", line_width=2, name=\"default params\",\n  lines(t_sim, y_rlc),\n  color=\"red\", line_width=2, name=\"R=2, L=0.4, C=0.5\",\n  lines(t_sim, y_rlc2),\n  color=\"black\", dash=\"dot\", explicit(1, t, 0, last(t_sim)),\n  title=\"RLC step response — parameter overrides\",\n  xlabel=\"Time (s)\", ylabel=\"vC\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 6,
+      "execution_count": 24,
       "outputs": [
         {
           "name": "stdout",
@@ -154,7 +154,7 @@
       "cell_type": "code",
       "source": "m_motor : mod_load(\"examples/DCMotor.mo\")$\nmod_print(m_motor)$",
       "metadata": {},
-      "execution_count": 7,
+      "execution_count": 25,
       "outputs": [
         {
           "name": "stdout",
@@ -169,7 +169,7 @@
       "cell_type": "code",
       "source": "[Am, Bm, Cm, Dm] : mod_state_space(m_motor, [ia = 0, omega = 0, va = 0])$\nprint(\"DC motor A =\")$ Am;\nprint(\"DC motor B =\")$ Bm;",
       "metadata": {},
-      "execution_count": 8,
+      "execution_count": 26,
       "outputs": [
         {
           "name": "stdout",
@@ -184,7 +184,7 @@
               "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi 100.0\\cr 0.0\\cr\\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
             ]
           },
-          "execution_count": 8,
+          "execution_count": 26,
           "metadata": {},
           "output_type": "execute_result"
         }
@@ -199,7 +199,7 @@
       "cell_type": "code",
       "source": "dt_m : 0.001$ nt_m : 5000$\nt_sim_m : makelist(i * dt_m, i, 0, nt_m - 1)$\ny_motor : sim_step(Am, Bm, Cm, dt_m, nt_m)$\n\nax_draw2d(\n  color=\"blue\", line_width=2, name=\"ω(t)\",\n  lines(t_sim_m, y_motor),\n  title=\"DC motor step response — speed\",\n  xlabel=\"Time (s)\", ylabel=\"ω (rad/s)\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 9,
+      "execution_count": 27,
       "outputs": [
         {
           "data": {
@@ -216,7 +216,7 @@
       "cell_type": "code",
       "source": "[re_m, im_m] : poles_of(Am)$\nax_draw2d(\n  marker_size=10, color=\"red\", name=\"poles\",\n  points(re_m, im_m),\n  color=\"gray\", dash=\"dash\", explicit(0, t, -110, 5),\n  title=\"DC motor pole locations\",\n  xlabel=\"Re\", ylabel=\"Im\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 10,
+      "execution_count": 28,
       "outputs": [
         {
           "data": {
@@ -238,7 +238,7 @@
       "cell_type": "code",
       "source": "m_tank : mod_load(\"examples/DoubleTank.mo\")$\nmod_print(m_tank)$",
       "metadata": {},
-      "execution_count": 11,
+      "execution_count": 29,
       "outputs": [
         {
           "name": "stdout",
@@ -253,7 +253,7 @@
       "cell_type": "code",
       "source": "[At, Bt, Ct, Dt] : mod_state_space(m_tank, [h1 = 0, h2 = 0, q_in = 0])$\nprint(\"Double-tank A =\")$ At;",
       "metadata": {},
-      "execution_count": 12,
+      "execution_count": 30,
       "outputs": [
         {
           "name": "stdout",
@@ -268,7 +268,7 @@
               "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi -0.5&0.0\\cr 0.5&-0.3\\cr \\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
             ]
           },
-          "execution_count": 12,
+          "execution_count": 30,
           "metadata": {},
           "output_type": "execute_result"
         }
@@ -278,7 +278,7 @@
       "cell_type": "code",
       "source": "dt_t : 0.1$ nt_t : 300$\nt_sim_t : makelist(i * dt_t, i, 0, nt_t - 1)$\ny_tank : sim_step(At, Bt, Ct, dt_t, nt_t)$\n\nax_draw2d(\n  color=\"blue\", line_width=2, name=\"h₂(t)\",\n  lines(t_sim_t, y_tank),\n  title=\"Double-tank step response — second-tank level\",\n  xlabel=\"Time (s)\", ylabel=\"h₂\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 13,
+      "execution_count": 31,
       "outputs": [
         {
           "data": {
@@ -295,7 +295,7 @@
       "cell_type": "code",
       "source": "[re_t, im_t] : poles_of(At)$\nax_draw2d(\n  marker_size=10, color=\"red\", name=\"poles\",\n  points(re_t, im_t),\n  color=\"gray\", dash=\"dash\", explicit(0, t, -1, 0.2),\n  title=\"Double-tank pole locations\",\n  xlabel=\"Re\", ylabel=\"Im\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 14,
+      "execution_count": 32,
       "outputs": [
         {
           "data": {
@@ -317,7 +317,7 @@
       "cell_type": "code",
       "source": "/* Symbolic state-space — useful for inspecting structure */\n[As, Bs, Cs, Ds] : mod_state_space_symbolic(m_rlc, [iL = 0, vC = 0, Vin = 0])$\nprint(\"Symbolic A:\")$ As;\nprint(\"Symbolic B:\")$ Bs;",
       "metadata": {},
-      "execution_count": 15,
+      "execution_count": 33,
       "outputs": [
         {
           "name": "stdout",
@@ -332,7 +332,7 @@
               "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi {{1}\\over{L}}\\cr 0\\cr \\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
             ]
           },
-          "execution_count": 15,
+          "execution_count": 33,
           "metadata": {},
           "output_type": "execute_result"
         }
@@ -342,7 +342,7 @@
       "cell_type": "code",
       "source": "/* Transfer function */\nH_rlc : mod_transfer_function(m_rlc, [iL = 0, vC = 0, Vin = 0])$\nprint(\"H(s) =\")$ H_rlc;\nprint(\"(closed form: 1 / (LCs² + RCs + 1) = 1 / (0.5 s² + s + 1))\")$",
       "metadata": {},
-      "execution_count": 16,
+      "execution_count": 34,
       "outputs": [
         {
           "name": "stdout",
@@ -357,7 +357,7 @@
       "cell_type": "code",
       "source": "/* Cascade two RLCs and plot the impulse response of the 4-state composite */\nSS_rlc : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$\n[Ac, Bc, Cc, Dc] : mod_cascade(SS_rlc, SS_rlc)$\nprint(\"Cascade A is\", length(Ac), \"x\", length(Ac), \"(2+2 states):\")$\nAc;",
       "metadata": {},
-      "execution_count": 17,
+      "execution_count": 35,
       "outputs": [
         {
           "name": "stdout",
@@ -372,7 +372,7 @@
               "\\ifx\\endpmatrix\\undefined\\pmatrix{\\else\\begin{pmatrix}\\fi -2.0&-2.0&0&0\\cr1.0&0.0&0&0\\cr 0.0&2.0&-2.0&-2.0\\cr 0.0&0.0&1.0&0.0\\cr\\ifx\\endpmatrix\\undefined}\\else\\end{pmatrix}\\fi "
             ]
           },
-          "execution_count": 17,
+          "execution_count": 35,
           "metadata": {},
           "output_type": "execute_result"
         }
@@ -382,7 +382,7 @@
       "cell_type": "code",
       "source": "/* Impulse response of the RLC */\n[t_imp, y_imp] : mod_impulse(m_rlc, [iL = 0, vC = 0, Vin = 0], 8.0)$\nax_draw2d(\n  color=\"blue\", line_width=2, name=\"impulse response\",\n  lines(t_imp, y_imp),\n  color=\"black\", dash=\"dot\", explicit(0, t, 0, last(t_imp)),\n  title=\"RLC impulse response\",\n  xlabel=\"Time (s)\", ylabel=\"vC(t)\",\n  grid=true, showlegend=true\n)$",
       "metadata": {},
-      "execution_count": 18,
+      "execution_count": 36,
       "outputs": [
         {
           "data": {

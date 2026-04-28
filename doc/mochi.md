@@ -129,21 +129,11 @@ SS : mod_state_space(m, [iL = 0, vC = 0, Vin = 0]);
 [A2, B2, C2, D2] : mod_cascade(SS, SS);
 ```
 
-## Caveat: `mod_load` calls `kill(...)` on every model symbol
+## Note: `mod_load` does not touch session state
 
-When `mod_load` reads a `.mo` file, the helper script emits a Maxima file that
-**unconditionally `kill`s every parameter, state, derivative, input, and output
-name** before binding them. That ensures user variables from the surrounding
-session don't accidentally substitute into the model's parameters or
-residuals.
-
-For example: the `DoubleTank.mo` example has a parameter named `A2`. If a user
-had earlier in their session bound `A2` to a matrix (say from `[A, B, C, D] :
-mod_state_space(...)` followed by `A2 : ...`), then loading the model would
-otherwise pick up that matrix value instead of treating `A2` as a fresh
-symbol. The `kill` call resets it.
-
-Practical consequence: **calling `mod_load` will erase any global bindings
-of the model's parameter, state, and I/O symbols**. If you need to preserve a
-session value, save it to a different name first, or use a `block(...)` to
-scope the model load.
+`mod_load` runs in Common Lisp (`mochi-loader.lisp`) and constructs the model
+struct directly — it interns fresh Lisp symbol objects for every parameter,
+state, derivative, input, and output name. **No Maxima-side eval pass means
+no global bindings are created or destroyed**, so a user variable in your
+session that shares a name with a model parameter (e.g. `A2` for
+`DoubleTank`'s second-tank area) is safe across `mod_load` calls.

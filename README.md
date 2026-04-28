@@ -17,12 +17,12 @@ Not yet supported: connector models, inheritance / `extends`, conditional declar
 
 ## Prerequisites
 
-- [Maxima](https://maxima.sourceforge.io/)
+- [Maxima](https://maxima.sourceforge.io/) running on SBCL (the standard distribution)
 - [Aximar](https://github.com/cmsd2/aximar) for notebook usage
 - [rumoca](https://github.com/CogniPilot/rumoca) — `cargo install rumoca`
-- Python 3 (system Python is fine; only used by the helper script)
+- [Quicklisp](https://www.quicklisp.org/) (one-time: `mxpm setup quicklisp`); `cl-json` is auto-installed when the package loads.
 
-The `RUMOCA_BIN` environment variable can override the rumoca path; otherwise the helper looks in `$PATH` and `~/.cargo/bin`.
+The `RUMOCA_BIN` environment variable can override the rumoca path; otherwise the loader looks in `$PATH` and `~/.cargo/bin`.
 
 ## Install
 
@@ -91,22 +91,17 @@ For the RLC example with default parameters:
   .mo file ─► rumoca compile --json ─► JSON DAE
                                     │
                                     ▼
-                       tools/rumoca_to_mac.py
-                       (walks JSON AST, emits Maxima syntax)
+                          mochi-loader.lisp
+                       (cl-json parses, walks AST,
+                        constructs Maxima struct)
                                     │
                                     ▼
                               mochi.mac
-                       (loads the emitted file,
-                        computes Jacobians, etc.)
+                       (mod_state_space, mod_simulate,
+                        mod_transfer_function, etc.)
 ```
 
-The Python helper is invoked from Maxima via a `system()` call to a temp file; the result is `load()`-ed back into Maxima.
-
-## Caveat: `mod_load` calls `kill(...)` on every model symbol
-
-The Python helper's emitted `.mac` file starts with a `kill(...)` over every parameter, state, derivative, input, and output name in the model. This guarantees those symbols are *fresh* before they get bound — so a user variable in the session that happens to share a name with a model parameter (e.g. `A2` for `DoubleTank`'s second-tank area) doesn't substitute its value into the model.
-
-Practical consequence: **`mod_load` will erase any existing bindings of the model's parameter, state, or I/O symbols**. Save anything you care about under a different name first, or scope the load inside `block(...)`.
+`mod_load` is implemented in Common Lisp via `mochi-loader.lisp` — it calls `rumoca compile --json` via `uiop:run-program`, parses the JSON with `cl-json`, walks the AST, and constructs a Maxima list directly with fresh Lisp symbols. **No temp file, no Python helper, and no Maxima-side eval pass that could disturb session state** — user variables that happen to share a name with a model parameter are unaffected.
 
 ## Examples
 

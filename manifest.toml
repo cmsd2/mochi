@@ -11,5 +11,8 @@ keywords = ["modelica", "control-systems", "state-space", "rumoca", "dae"]
 [dependencies]
 numerics = ">= 0.1.0"
 
+[lisp]
+quicklisp_systems = ["cl-json"]
+
 [test]
 files = ["rtest_mochi.mac"]
