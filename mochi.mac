@@ -97,19 +97,23 @@ mod_print(m) := block([],
 /* Internal: build A, B, C, D as symbolic Maxima matrices, with all
    parameters and state/input symbols left as symbols (no substitution). */
 mod__symbolic_ss(m) := block(
-  [states, derivs, inputs, outputs, residuals,
-   solved, f_expr, y_expr, A, B, C, D, n, ni, no],
+  [states, derivs, algebraics, inputs, outputs, residuals,
+   unknowns, solved, f_expr, y_expr, A, B, C, D, n, ni, no, errcatch_result],
   states    : mod_get(m, 'states),
   derivs    : mod_get(m, 'derivs),
+  /* algebraics only exist for connector-flattened DAEs; older models
+     (no `algebraics` field) silently get the empty list. */
+  errcatch_result : errcatch(mod_get(m, 'algebraics)),
+  algebraics : if errcatch_result = [] then [] else errcatch_result[1],
   inputs    : mod_get(m, 'inputs),
   outputs   : mod_get(m, 'outputs),
   residuals : mod_get(m, 'residuals),
-  /* Solve residuals (= 0) for derivs and outputs. Each residual is an
-     expression; we wrap as `expr = 0` and solve symbolically. */
-  solved : solve(map(lambda([r], r = 0), residuals),
-                 append(derivs, outputs)),
+  /* Solve residuals (= 0) for derivs, outputs, and any algebraic
+     variables introduced by connector flattening. */
+  unknowns : append(derivs, outputs, algebraics),
+  solved : solve(map(lambda([r], r = 0), residuals), unknowns),
   if solved = [] then
-    error("mod__symbolic_ss: could not solve residuals for derivs+outputs"),
+    error("mod__symbolic_ss: could not solve residuals for ", unknowns),
   solved : solved[1],
   f_expr : map(lambda([d], rhs(mod__assoc(d, solved))), derivs),
   y_expr : map(lambda([y], rhs(mod__assoc(y, solved))), outputs),

@@ -8,12 +8,13 @@ Read Modelica models into Maxima symbolic equations.
 
 Early prototype. Handles a *useful subset* of Modelica:
 
-- single-model files (no inheritance / connectors / hybrid blocks)
+- single-model files
+- **multi-component models composed via direct equations** (e.g. `tank1.q_in = source;` to wire instances together — see `examples/TwoTanks.mo`). Hierarchical names like `tank1.h` are translated to Maxima-safe `tank1_h`; connector-internal variables are auto-classified as algebraic and solved away.
 - declarations of parameters, state variables (with `der(...)`), inputs, outputs
 - continuous-time equations
 - the standard Modelica builtins (`sin`, `cos`, `exp`, `sqrt`, `log`, ...)
 
-Not yet supported: connector models, inheritance / `extends`, conditional declarations, discrete events, FMU export.
+Not yet supported: full Modelica `connect()` syntax with custom connector types, inheritance / `extends`, conditional declarations, discrete events, FMU export.
 
 ## Prerequisites
 
@@ -109,7 +110,8 @@ See `examples/`:
 
 - `RLCircuit.mo` — series RLC, two-state plant, single input/output.
 - `DCMotor.mo` — armature current + angular speed, voltage in, speed out.
-- `DoubleTank.mo` — cascaded tank levels, inflow in, lower-tank level out.
+- `DoubleTank.mo` — cascaded tank levels, inflow in, lower-tank level out (single-model formulation).
+- `TwoTanks.mo` — same as DoubleTank but built from two `Tank` *instances* connected by direct equations. Demonstrates dotted-name flattening and algebraic-variable handling.
 
 ## Roadmap
 

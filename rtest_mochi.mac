@@ -127,3 +127,51 @@ true;
 
 length(Afb);
 2;
+
+/* ---- Connected plants (TwoTanks) ----
+   Two Tank instances composed in a single .mo file via direct equations.
+   rumoca flattens the hierarchy; mochi translates dotted names like
+   `tank1.h' to `tank1_h' and treats connector-internal variables as
+   algebraic. */
+
+(m_tt : mod_load("examples/TwoTanks.mo"), true);
+true;
+
+mod_get(m_tt, 'name);
+"TwoTanks";
+
+/* Top-level inputs/outputs are scanned only from the TwoTanks block, not
+   from the inner Tank class — so we get `source` (1) and `level2` (1),
+   not Tank's own q_in / q_out. */
+length(mod_get(m_tt, 'inputs));
+1;
+
+length(mod_get(m_tt, 'outputs));
+1;
+
+/* States are dot-translated: tank1_h, tank2_h. */
+length(mod_get(m_tt, 'states));
+2;
+
+/* Algebraic variables include the four connector-internal flows. */
+is(length(mod_get(m_tt, 'algebraics)) >= 2);
+true;
+
+/* State-space at the origin */
+([Att, Btt, Ctt, Dtt] : mod_state_space(m_tt,
+                                         [tank1_h = 0, tank2_h = 0, source = 0]),
+ true);
+true;
+
+/* For default tank1.A=1, tank1.k=0.5, tank2.A=2 (override), tank2.k=0.5:
+     der(tank1_h) = source - 0.5·tank1_h
+     der(tank2_h) = 0.5·tank1_h/2 - 0.5·tank2_h/2 = 0.25 tank1_h - 0.25 tank2_h
+   So A = [[-0.5, 0], [0.25, -0.25]], B = [[1], [0]], C = [[0, 1]]. */
+Att;
+matrix([-0.5, 0.0], [0.25, -0.25]);
+
+Btt;
+matrix([1.0], [0.0]);
+
+Ctt;
+matrix([0.0, 1.0]);

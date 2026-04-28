@@ -63,10 +63,18 @@ that *displays* as `R' rather than `r'."
           (has-lower (string-upcase s))
           (t s))))
 
+(defun mochi--flatten-dots (name)
+  "Translate hierarchical Modelica names like `tank1.h' into Maxima-safe
+identifiers `tank1_h' (Maxima symbols can't contain dots)."
+  (substitute #\_ #\. name))
+
 (defun mochi--mxsym (name)
-  "Intern NAME (a string in the original Modelica casing) as a Maxima
-symbol whose display matches NAME."
-  (intern (concatenate 'string "$" (mochi--maxima-case-invert name)) :maxima))
+  "Intern NAME (a string in the original Modelica casing, possibly with
+hierarchical dots from connector composition) as a Maxima symbol whose
+display matches NAME with dots translated to underscores."
+  (intern (concatenate 'string "$"
+                       (mochi--maxima-case-invert (mochi--flatten-dots name)))
+          :maxima))
 
 (defun mochi--mlist (items)
   "Build a Maxima list ((MLIST) item1 item2 ...) from a Lisp list."
@@ -255,32 +263,47 @@ return a list of <name> strings."
       (loop for line = (read-line s nil nil)
             while line do (write-line line out)))))
 
+(defun mochi--top-model-block (text)
+  "Return (values name body) for the *last* `model NAME ... end NAME;'
+block in TEXT.  Modelica's convention is that the top-level model is the
+last one declared; reusable building-block classes come earlier."
+  (let ((best-name nil)
+        (best-body nil)
+        (search-from 0))
+    (loop
+      (let ((kw-pos (search "model " text :start2 search-from)))
+        (unless kw-pos (return (values best-name best-body)))
+        ;; Pull the model's name
+        (let* ((name-start (+ kw-pos 6))
+               (name-end name-start))
+          (loop while (and (< name-end (length text))
+                           (or (alphanumericp (char text name-end))
+                               (char= (char text name-end) #\_)))
+                do (incf name-end))
+          (when (> name-end name-start)
+            (let* ((name (subseq text name-start name-end))
+                   (terminator (concatenate 'string "end " name ";"))
+                   (end-pos (search terminator text :start2 name-end)))
+              (when end-pos
+                (setf best-name name
+                      best-body (subseq text name-end end-pos))
+                (setf search-from (+ end-pos (length terminator)))))))
+        (when (>= search-from (length text)) (return (values best-name best-body)))
+        (setf search-from (max search-from (1+ kw-pos)))))))
+
 (defun mochi--scan-io (mo-path)
-  "Return (values inputs outputs) from the source file."
-  (let* ((text (mochi--strip-comments (mochi--read-file mo-path))))
-    (values (mochi--scan-keyword text "input")
-            (mochi--scan-keyword text "output"))))
+  "Return (values inputs outputs) from the *top-level* model block of the
+file -- not the inner class declarations of any reusable components."
+  (let* ((text (mochi--strip-comments (mochi--read-file mo-path)))
+         (body (nth-value 1 (mochi--top-model-block text)))
+         (scan-text (or body text)))
+    (values (mochi--scan-keyword scan-text "input")
+            (mochi--scan-keyword scan-text "output"))))
 
 (defun mochi--model-name-from-source (mo-path)
-  "Best-effort extraction of the top-level model name from the .mo file."
+  "Top-level model name (the *last* `model NAME' in the file)."
   (let* ((text (mochi--strip-comments (mochi--read-file mo-path))))
-    (or (mochi--first-keyword-name text "model")
-        (mochi--first-keyword-name text "class")
-        (mochi--first-keyword-name text "block")
-        "Unnamed")))
-
-(defun mochi--first-keyword-name (text keyword)
-  (let* ((pat (concatenate 'string keyword " "))
-         (pos (search pat text)))
-    (when pos
-      (let* ((start (+ pos (length pat)))
-             (id-start start))
-        (loop while (and (< start (length text))
-                         (or (alphanumericp (char text start))
-                             (char= (char text start) #\_)))
-              do (incf start))
-        (when (> start id-start)
-          (subseq text id-start start))))))
+    (or (nth-value 0 (mochi--top-model-block text)) "Unnamed")))
 
 ;; --- Build the Maxima struct -------------------------------------------
 
@@ -342,22 +365,67 @@ number (defaulting to 0)."
 
 ;; --- Public entry point ------------------------------------------------
 
+(defun mochi--algebraic-symbols (raw)
+  "RAW is the alist under :y from rumoca (algebraic variables)."
+  (mapcar (lambda (entry)
+            (mochi--mxsym (mochi--name-from-info (cdr entry))))
+          raw))
+
+(defun mochi--walk-syms (expr)
+  "Walk a Maxima Lisp expression and return all `$'-prefixed user symbols."
+  (cond
+    ((and (symbolp expr)
+          (let ((n (symbol-name expr)))
+            (and (plusp (length n)) (char= (char n 0) #\$))))
+     (list expr))
+    ((consp expr) (mapcan #'mochi--walk-syms expr))
+    (t nil)))
+
+(defun mochi--unclassified-syms (residual-exprs known-syms)
+  "Return symbols appearing in RESIDUAL-EXPRS that aren't in KNOWN-SYMS.
+These are typically connector-flattened outputs (e.g. tank1_q_out) that
+rumoca didn't put in :y but which still need to be solved for."
+  (let ((all (remove-duplicates (mapcan #'mochi--walk-syms residual-exprs))))
+    (set-difference all known-syms)))
+
 (defun $mod_load (path)
   "Parse a Modelica .mo file and return a Maxima model struct."
   (let* ((mo-path (if (stringp path) path (string path)))
          (json-text (mochi--run-rumoca mo-path))
          (model (cl-json:decode-json-from-string json-text))
-         (params (cdr (assoc :p model)))
-         (states (cdr (assoc :x model)))
-         (eqs (cdr (assoc :f--x model))))
+         (raw-params (cdr (assoc :p model)))
+         (raw-states (cdr (assoc :x model)))
+         (raw-algebraics (cdr (assoc :y model)))
+         (raw-eqs (cdr (assoc :f--x model)))
+         (residual-exprs (mapcar (lambda (e)
+                                   (mochi--ast-to-maxima (mochi--get e :residual)))
+                                 raw-eqs)))
     (multiple-value-bind (inputs outputs) (mochi--scan-io mo-path)
-      (let ((name (mochi--model-name-from-source mo-path)))
+      (let* ((name (mochi--model-name-from-source mo-path))
+             (param-syms (mapcar (lambda (e) (mochi--mxsym (mochi--name-from-info (cdr e))))
+                                 raw-params))
+             (state-syms (mapcar (lambda (e) (mochi--mxsym (mochi--name-from-info (cdr e))))
+                                 raw-states))
+             (deriv-syms (mapcar (lambda (e) (mochi--mxsym (concatenate 'string "der_"
+                                                                       (mochi--name-from-info (cdr e)))))
+                                 raw-states))
+             (input-syms  (mapcar #'mochi--mxsym inputs))
+             (output-syms (mapcar #'mochi--mxsym outputs))
+             (alg-from-y  (mochi--algebraic-symbols raw-algebraics))
+             (known-syms  (append param-syms state-syms deriv-syms
+                                  input-syms output-syms alg-from-y))
+             ;; Anything in residuals that isn't one of the above must be
+             ;; an algebraic variable that rumoca didn't put in :y --
+             ;; typically a connector-flattened output.
+             (alg-extra   (mochi--unclassified-syms residual-exprs known-syms))
+             (algebraics  (append alg-from-y alg-extra)))
         (mochi--mlist
          (list (mochi--mequal '$name name)
-               (mochi--mequal '$params (mochi--params-list params))
-               (mochi--mequal '$states (mochi--state-symbols states))
-               (mochi--mequal '$derivs (mochi--deriv-symbols states))
-               (mochi--mequal '$inputs (mochi--io-list inputs))
-               (mochi--mequal '$outputs (mochi--io-list outputs))
-               (mochi--mequal '$initial (mochi--initial-list states))
-               (mochi--mequal '$residuals (mochi--residuals eqs))))))))
+               (mochi--mequal '$params (mochi--params-list raw-params))
+               (mochi--mequal '$states (mochi--mlist state-syms))
+               (mochi--mequal '$derivs (mochi--mlist deriv-syms))
+               (mochi--mequal '$algebraics (mochi--mlist algebraics))
+               (mochi--mequal '$inputs (mochi--mlist input-syms))
+               (mochi--mequal '$outputs (mochi--mlist output-syms))
+               (mochi--mequal '$initial (mochi--initial-list raw-states))
+               (mochi--mequal '$residuals (mochi--mlist residual-exprs))))))))
