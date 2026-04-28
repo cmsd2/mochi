@@ -38,14 +38,19 @@ then assumes it's on $PATH."
           (namestring cargo)))
       "rumoca"))
 
-(defun mochi--run-rumoca (mo-path)
-  "Run rumoca on MO-PATH and return the JSON output as a string."
+(defun mochi--run-rumoca (mo-path &optional model-name)
+  "Run rumoca on MO-PATH and return the JSON output as a string.
+If MODEL-NAME is given, pass --model so rumoca picks that class as the
+top-level (required when the file contains more than one model, e.g.
+when reusable component classes are defined alongside the top-level
+system)."
   (let* ((abs (truename mo-path))
          (dir (directory-namestring abs))
-         (name (file-namestring abs)))
-    (uiop:run-program (list (mochi--rumoca-bin) "compile" "--json" name)
-                      :output :string
-                      :directory dir)))
+         (name (file-namestring abs))
+         (cmd (append (list (mochi--rumoca-bin) "compile" "--json")
+                      (when model-name (list "--model" model-name))
+                      (list name))))
+    (uiop:run-program cmd :output :string :directory dir)))
 
 ;; --- Maxima expression construction helpers ----------------------------
 
@@ -291,14 +296,163 @@ last one declared; reusable building-block classes come earlier."
         (when (>= search-from (length text)) (return (values best-name best-body)))
         (setf search-from (max search-from (1+ kw-pos)))))))
 
+(defun mochi--collect-class-io (text)
+  "Walk every `model NAME ... end NAME;' block in TEXT and return an alist
+mapping the class name (string) to (list inputs outputs), each a list of
+declared identifier names."
+  (let ((classes '())
+        (search-from 0)
+        (len (length text)))
+    (loop
+      (let ((kw-pos (search "model " text :start2 search-from)))
+        (unless kw-pos (return (nreverse classes)))
+        (let* ((name-start (+ kw-pos 6))
+               (name-end name-start))
+          (loop while (and (< name-end len)
+                           (or (alphanumericp (char text name-end))
+                               (char= (char text name-end) #\_)))
+                do (incf name-end))
+          (cond
+            ((> name-end name-start)
+             (let* ((cname (subseq text name-start name-end))
+                    (terminator (concatenate 'string "end " cname ";"))
+                    (end-pos (search terminator text :start2 name-end)))
+               (cond
+                 (end-pos
+                  (let ((body (subseq text name-end end-pos)))
+                    (push (list cname
+                                (mochi--scan-keyword body "input")
+                                (mochi--scan-keyword body "output"))
+                          classes))
+                  (setf search-from (+ end-pos (length terminator))))
+                 (t (setf search-from name-end)))))
+            (t (setf search-from (1+ kw-pos)))))
+        (when (>= search-from len) (return (nreverse classes)))))))
+
+(defun mochi--read-ident-at (text start)
+  "Read a (possibly empty) identifier from TEXT starting at START.
+Return the substring or nil if no identifier."
+  (let ((end start))
+    (loop while (and (< end (length text))
+                     (or (alphanumericp (char text end))
+                         (char= (char text end) #\_)))
+          do (incf end))
+    (when (> end start) (subseq text start end))))
+
+(defun mochi--skip-spaces (text pos)
+  "Advance past spaces and tabs."
+  (loop while (and (< pos (length text))
+                   (member (char text pos) '(#\Space #\Tab)))
+        do (incf pos))
+  pos)
+
+(defun mochi--bound-lhses (body)
+  "Walk the equation section of BODY (the top-level model body) and
+collect identifier names that appear on the LHS of an equation.
+Identifiers may include dots (`tank1.q_in').  Used to exclude these
+from the candidate-inputs list -- if a variable is set by a top-level
+equation, it's not a free input.  Skips `connect(a, b);' calls and
+anything inside parentheses (so parameter modifications like
+`Resistor r1(R = 1.0);' don't fool us)."
+  (let* ((eq-start (search "equation" body))
+         (scan (if eq-start
+                   (subseq body (+ eq-start (length "equation")))
+                   ""))
+         (len (length scan))
+         (i 0)
+         (depth 0)
+         (results '()))
+    (loop while (< i len)
+          do (let ((ch (char scan i)))
+               (cond
+                 ((or (char= ch #\() (char= ch #\[)) (incf depth) (incf i))
+                 ((or (char= ch #\)) (char= ch #\])) (decf depth) (incf i))
+                 ((and (zerop depth)
+                       (or (alpha-char-p ch) (char= ch #\_)))
+                  ;; identifier-or-instance.var
+                  (let ((start i))
+                    (loop while (and (< i len)
+                                     (or (alphanumericp (char scan i))
+                                         (char= (char scan i) #\_)
+                                         (char= (char scan i) #\.)))
+                          do (incf i))
+                    (let* ((id (subseq scan start i))
+                           (j (mochi--skip-spaces scan i)))
+                      ;; Look ahead for `= NOT-=' at the top level
+                      (when (and (< j len) (char= (char scan j) #\=)
+                                 (not (and (< (1+ j) len)
+                                           (char= (char scan (1+ j)) #\=))))
+                        ;; Skip pure connect() / smooth() calls etc.; identifier
+                        ;; followed by `(' is a function call, not LHS.  We
+                        ;; already advanced past the identifier so check the
+                        ;; original position's lookahead for `('.
+                        (push id results))
+                      (setf i j))))
+                 (t (incf i)))))
+    (nreverse results)))
+
+(defun mochi--scan-instances (body class-table)
+  "BODY is the top-level model's body.  CLASS-TABLE is the alist returned
+by mochi--collect-class-io.  Find component instance declarations of the
+form `ClassName instance_name'; for each instance, namespace the class's
+input/output names as `instance.var' and return (values inputs outputs).
+
+Inputs that are bound by an explicit equation in BODY (e.g. `tank1.q_in
+= source;') are excluded -- they're algebraic, not free top-level
+inputs."
+  (let ((inputs '())
+        (outputs '())
+        (bound (mochi--bound-lhses body)))
+    (dolist (entry class-table)
+      (let* ((cname (first entry))
+             (cinputs (second entry))
+             ;; Instance OUTPUTS deliberately not used: see note below.
+             (search-from 0))
+        (loop
+          (let ((pos (search cname body :start2 search-from)))
+            (unless pos (return))
+            ;; Require word boundary before
+            (let ((before (if (zerop pos) #\Space (char body (1- pos))))
+                  (after-name (mochi--skip-spaces body (+ pos (length cname)))))
+              (cond
+                ((or (alphanumericp before) (char= before #\_))
+                 ;; Embedded inside another identifier; skip
+                 (setf search-from (1+ pos)))
+                (t
+                 (let ((inst-name (mochi--read-ident-at body after-name)))
+                   (cond
+                     ((and inst-name (> (length inst-name) 0))
+                      ;; Only instance INPUTS are surfaced: an instance's
+                      ;; declared `input Real X' is a top-level free
+                      ;; variable unless bound by an equation here.
+                      ;; Instance OUTPUTS are not surfaced -- they're
+                      ;; internal signals; the user can read them via
+                      ;; mod_get(m, 'algebraics) or compute via a
+                      ;; user-typed top-level output equation.
+                      (dolist (v cinputs)
+                        (let ((qualified (concatenate 'string inst-name "." v)))
+                          (unless (member qualified bound :test #'string=)
+                            (push qualified inputs))))
+                      (setf search-from (+ after-name (length inst-name))))
+                     (t (setf search-from (1+ pos))))))))))))
+    (values (nreverse inputs) (nreverse outputs))))
+
 (defun mochi--scan-io (mo-path)
-  "Return (values inputs outputs) from the *top-level* model block of the
-file -- not the inner class declarations of any reusable components."
+  "Return (values inputs outputs) for the top-level model.  Combines:
+  (a) `input Real X' and `output Real X' declarations in the top-level
+      model's own body, and
+  (b) variables exposed via component instances: each `Type instance' line
+      contributes that class's inputs as `instance.var' and similarly for
+      outputs."
   (let* ((text (mochi--strip-comments (mochi--read-file mo-path)))
-         (body (nth-value 1 (mochi--top-model-block text)))
-         (scan-text (or body text)))
-    (values (mochi--scan-keyword scan-text "input")
-            (mochi--scan-keyword scan-text "output"))))
+         (top-body (or (nth-value 1 (mochi--top-model-block text)) text))
+         (class-table (mochi--collect-class-io text))
+         (own-inputs (mochi--scan-keyword top-body "input"))
+         (own-outputs (mochi--scan-keyword top-body "output")))
+    (multiple-value-bind (inst-inputs inst-outputs)
+        (mochi--scan-instances top-body class-table)
+      (values (append own-inputs inst-inputs)
+              (append own-outputs inst-outputs)))))
 
 (defun mochi--model-name-from-source (mo-path)
   "Top-level model name (the *last* `model NAME' in the file)."
@@ -388,10 +542,20 @@ rumoca didn't put in :y but which still need to be solved for."
   (let ((all (remove-duplicates (mapcan #'mochi--walk-syms residual-exprs))))
     (set-difference all known-syms)))
 
-(defun $mod_load (path)
-  "Parse a Modelica .mo file and return a Maxima model struct."
+(defun $mod_load (path &rest args)
+  "Parse a Modelica .mo file and return a Maxima model struct.
+With one argument, auto-selects the top-level model (the last `model
+NAME ... end NAME;' block in the file).  With a second string argument,
+uses that as the explicit model name to compile."
   (let* ((mo-path (if (stringp path) path (string path)))
-         (json-text (mochi--run-rumoca mo-path))
+         (explicit-name (when args
+                          (let ((a (first args)))
+                            (cond ((stringp a) a)
+                                  ((symbolp a) (subseq (symbol-name a) 1))
+                                  (t (format nil "~A" a))))))
+         (resolved-name (or explicit-name
+                            (mochi--model-name-from-source mo-path)))
+         (json-text (mochi--run-rumoca mo-path resolved-name))
          (model (cl-json:decode-json-from-string json-text))
          (raw-params (cdr (assoc :p model)))
          (raw-states (cdr (assoc :x model)))
@@ -401,7 +565,7 @@ rumoca didn't put in :y but which still need to be solved for."
                                    (mochi--ast-to-maxima (mochi--get e :residual)))
                                  raw-eqs)))
     (multiple-value-bind (inputs outputs) (mochi--scan-io mo-path)
-      (let* ((name (mochi--model-name-from-source mo-path))
+      (let* ((name resolved-name)
              (param-syms (mapcar (lambda (e) (mochi--mxsym (mochi--name-from-info (cdr e))))
                                  raw-params))
              (state-syms (mapcar (lambda (e) (mochi--mxsym (mochi--name-from-info (cdr e))))

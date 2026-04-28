@@ -8,13 +8,14 @@ Read Modelica models into Maxima symbolic equations.
 
 Early prototype. Handles a *useful subset* of Modelica:
 
-- single-model files
-- **multi-component models composed via direct equations** (e.g. `tank1.q_in = source;` to wire instances together — see `examples/TwoTanks.mo`). Hierarchical names like `tank1.h` are translated to Maxima-safe `tank1_h`; connector-internal variables are auto-classified as algebraic and solved away.
-- declarations of parameters, state variables (with `der(...)`), inputs, outputs
-- continuous-time equations
-- the standard Modelica builtins (`sin`, `cos`, `exp`, `sqrt`, `log`, ...)
+- **Single-model files** (one `model … end Name;` block).
+- **Equation-composed multi-component models** (e.g. `tank1.q_in = source;` wiring instances by direct assignment — see `examples/TwoTanks.mo`).
+- **Connector-composed multi-component models** with `connect(a.port, b.port)` and `flow`-marked variables — see `examples/RCFilter.mo`. rumoca expands the connectors into Kirchhoff-style equations; mochi translates dotted names to Maxima-safe identifiers, auto-detects instance inputs by walking class declarations, and treats connector-internal variables as algebraics.
+- Declarations of parameters, state variables (with `der(...)`), inputs, outputs.
+- Continuous-time equations.
+- The standard Modelica builtins (`sin`, `cos`, `exp`, `sqrt`, `log`, ...).
 
-Not yet supported: full Modelica `connect()` syntax with custom connector types, inheritance / `extends`, conditional declarations, discrete events, FMU export.
+Not yet supported: inheritance / `extends`, conditional declarations, discrete events, FMU export.
 
 ## Prerequisites
 
@@ -112,6 +113,7 @@ See `examples/`:
 - `DCMotor.mo` — armature current + angular speed, voltage in, speed out.
 - `DoubleTank.mo` — cascaded tank levels, inflow in, lower-tank level out (single-model formulation).
 - `TwoTanks.mo` — same as DoubleTank but built from two `Tank` *instances* connected by direct equations. Demonstrates dotted-name flattening and algebraic-variable handling.
+- `RCFilter.mo` — RC low-pass filter using proper Modelica `connect(...)` syntax over an `ElectricalPin` connector class. Demonstrates flow/potential expansion and per-instance input detection.
 
 ## Roadmap
 

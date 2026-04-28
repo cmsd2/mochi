@@ -175,3 +175,48 @@ matrix([1.0], [0.0]);
 
 Ctt;
 matrix([0.0, 1.0]);
+
+/* ---- Modelica connect() syntax (RCFilter) ----
+   Real Modelica connector composition: each component declares a port
+   class (ElectricalPin), connect() statements wire instances together,
+   rumoca expands the connectors into Kirchhoff-style equations
+   (potential equality + flow sum-to-zero) before mochi sees the JSON. */
+
+(m_rc : mod_load("examples/RCFilter.mo"), true);
+true;
+
+mod_get(m_rc, 'name);
+"RCFilter";
+
+length(mod_get(m_rc, 'states));
+1;
+
+/* The free input is the VoltageSource instance's `Vin' (declared
+   `input Real Vin' inside the VoltageSource class). mochi picks it
+   up by walking class declarations and namespacing per-instance. */
+mod_get(m_rc, 'inputs);
+[vs_Vin];
+
+mod_get(m_rc, 'outputs);
+[v_cap];
+
+/* RC low-pass: A = -1/(R·C), B = 1/(R·C), C = 1, D = 0.
+   Defaults R=1, C=0.5 → A = -2, B = 2. */
+([Arc, Brc, Crc, Drc] : mod_state_space(m_rc, [c1_v = 0, vs_Vin = 0]), true);
+true;
+
+Arc;
+matrix([-2.0]);
+
+Brc;
+matrix([2.0]);
+
+Crc;
+matrix([1.0]);
+
+/* Step response → DC gain = 1, settles at 1. */
+([t_rc, y_rc] : mod_step(m_rc, [c1_v = 0, vs_Vin = 0], 5.0), true);
+true;
+
+is(abs(last(y_rc) - 1.0) < 0.01);
+true;
