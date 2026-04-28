@@ -1,7 +1,7 @@
 {
   "version": 1,
   "package": "mochi",
-  "source": "./doc/mochi.md",
+  "source": "doc/mochi.md",
   "symbols": {
     "mod__causalise": {
       "type": "Function",
@@ -106,8 +106,13 @@
       "type": "Function",
       "signature": "mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts])",
       "summary": "Integrate the model's nonlinear DAE via SUNDIALS CVODE.",
-      "body_md": "Integrate the model's nonlinear DAE via SUNDIALS CVODE.\n\n- `x0` — initial state vector. Either a flat list of floats in the order\n  given by `mod_get(m, 'states)`, or a list of equations\n  `[state_sym = value, ...]`.\n- `u_fn` — `lambda([t], [u1, u2, ...])` returning the input vector.\n- `t_end` — end time.\n- `opts` — list of equations:\n  - `dt` — sample period (default `t_end/500`).\n  - `params` — parameter override list (default: `.mo` defaults).\n  - `method` — `'adams` (default, non-stiff) or `'bdf` (stiff systems).\n  - `rtol` — relative tolerance (default `1e-8`).\n  - `atol` — absolute tolerance (default `1e-8`).\n  - `return` — `'outputs` (default) or `'states` to get the full state\n    trajectory instead of the output trajectory.\n\nReturns `[t_list, y_list]`. For SISO `y_list` is a flat list; for\nmulti-output it's a list of length-`|outputs|` lists.",
-      "examples": [],
+      "body_md": "Integrate the model's nonlinear DAE via SUNDIALS CVODE.\n\n- `x0` — initial state vector. Either a flat list of floats in the order\n  given by `mod_get(m, 'states)`, or a list of equations\n  `[state_sym = value, ...]`.\n- `u_fn` — `lambda([t], [u1, u2, ...])` returning the input vector.\n- `t_end` — end time.\n- `opts` — list of equations:\n  - `dt` — sample period (default `t_end/500`).\n  - `params` — parameter override list (default: `.mo` defaults).\n  - `method` — `'adams` (default, non-stiff) or `'bdf` (stiff systems).\n  - `rtol` — relative tolerance (default `1e-8`).\n  - `atol` — absolute tolerance (default `1e-8`).\n  - `return` — `'outputs` (default) or `'states` to get the full state\n    trajectory instead of the output trajectory.\n  - `events` — list of `[event_expr, reset_eqs]` pairs for hybrid systems\n    (see below).\n\nReturns `[t_list, y_list]`. For SISO `y_list` is a flat list; for\nmulti-output it's a list of length-`|outputs|` lists.\n\n#### Discrete events\n\nFor models with `when` clauses (Modelica's discrete-event mechanism),\npass an `'events` list of `[event_expr, reset_eqs]` pairs:\n\n```maxima\n[t, x] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],\n                                lambda([t], []),\n                                5.0,\n                                ['return = 'states,\n                                 'events = [[h, [v = -e * v]]]])$\n```\n\n- `event_expr` is a Maxima expression in the state symbols. Its zero\n  crossings (detected by SUNDIALS' rootfinder) trigger the event.\n- `reset_eqs` is a list of state-reset equations like `[v = -e * v]`\n  applied at the event time to compute the post-event state.\n  Variables not mentioned keep their current value.\n\nThe integrator runs segment-by-segment between requested sample times,\nrestarting CVODE from the post-reset state each time an event fires.\nAfter each reset the state is nudged forward by a tiny Euler half-step\n(`1e-4` s by default) to push it off the event boundary, avoiding\nspurious re-detection of the same zero-crossing. There's also a\nwatchdog limit of 100 events per segment to break Zeno-like loops.\n\nSee `examples/BouncingBall.mo` for a complete worked example.",
+      "examples": [
+        {
+          "input": "[t, x] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],\n                                lambda([t], []),\n                                5.0,\n                                ['return = 'states,\n                                 'events = [[h, [v = -e * v]]]])$",
+          "output": ""
+        }
+      ],
       "see_also": [],
       "section": "Subsystem: mochi-nonlinear"
     },

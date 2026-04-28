@@ -92,3 +92,47 @@ true;
 /* Each entry of x_st is a length-2 list [theta, omega]. */
 length(x_st[1]);
 2;
+
+/* ---- Discrete events ----
+   The bouncing ball is the canonical hybrid-system test case.
+   Continuous dynamics are free-fall under gravity; the discrete event
+   is the ground impact, which discontinuously flips velocity (multiplied
+   by the coefficient of restitution).  mod_simulate_nonlinear's
+   `'events` opt watches a list of [event_expr, reset_eqs] pairs:
+   CVODE detects zero crossings of `event_expr', and when one fires
+   `reset_eqs' is applied to compute the post-event state. */
+
+(m_ball : mod_load("examples/BouncingBall.mo"), true);
+true;
+
+mod_get(m_ball, 'states);
+[h, v];
+
+/* Drop from h = 10, no input, bounce off h = 0 with e = 0.8.  Run long
+   enough that several bounces happen.  Verify ball's height stays ≥ 0
+   (within tolerance) — i.e. resets are actually being applied. */
+([t_b, x_b] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],
+                                      lambda([t], []),
+                                      5.0,
+                                      ['return = 'states, 'dt = 0.05,
+                                       'events = [[h, [v = -e * v]]]]),
+ true);
+true;
+
+/* All recorded heights should be >= 0 (within numerical tolerance).
+   Without the bouncing event, the ball would fly to h = -112.6 by t=5. */
+is(lmin(map(first, x_b)) > -0.01);
+true;
+
+/* After the first bounce (around t=1.43), v should be positive
+   (rebound up).  At t=1.5 (sample index 31, since dt=0.05) we expect
+   v positive. */
+is(x_b[31][2] > 0);
+true;
+
+/* Total energy = m*g*h + 0.5*m*v^2 should be non-increasing across
+   bounces (e < 1 means each bounce loses energy).  Sample at t=0 and
+   t=5: energy at end < energy at start. */
+is(9.81 * x_b[1][1] + 0.5 * x_b[1][2]^2
+   > 9.81 * last(x_b)[1] + 0.5 * last(x_b)[2]^2);
+true;

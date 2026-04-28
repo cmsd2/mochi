@@ -46,6 +46,31 @@ mod__resolve_x0(states, x0) := block(
     result : x0,
   float(result))$
 
+/* mod__apply_reset(reset_rule, y_ev, t_ev, states, extra_subst)
+ *
+ * Apply a state-reset rule (list of equations like `[v = -e*v, h = 0]`)
+ * to the state at the event time, returning the new state vector.
+ * Variables not mentioned in the rule keep their current value.
+ * `extra_subst' is an optional substitution list (typically the
+ * parameter substitution) applied to each reset RHS before float-ing. */
+mod__apply_reset(reset_rule, y_ev, t_ev, states, [extra_subst]) := block(
+  [n, ev_subst, full_subst, extra, i, eq, var, val],
+  n : length(states),
+  extra : if length(extra_subst) >= 1 then extra_subst[1] else [],
+  ev_subst : makelist(states[i] = y_ev[i], i, 1, n),
+  full_subst : append([t = t_ev], ev_subst, extra),
+  makelist(block([this_var : states[i],
+                  default_val : y_ev[i],
+                  matched : false,
+                  result_val],
+             result_val : default_val,
+             for eq in reset_rule do
+               if lhs(eq) = this_var and not matched then (
+                 result_val : float(subst(full_subst, rhs(eq))),
+                 matched : true),
+             result_val),
+           i, 1, n))$
+
 /* mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts])
  *
  *   m      — model from mod_load
@@ -60,13 +85,24 @@ mod__resolve_x0(states, x0) := block(
  *              rtol      — relative tolerance (default 1e-8)
  *              atol      — absolute tolerance (default 1e-8)
  *              return    — 'outputs (default) or 'states
+ *              events    — list of [event_expr, reset_eqs] pairs (see below)
  *
  * Returns `[t_list, y_list]`.  For SISO `y_list` is a flat list; for
  * multi-output it's a list of length-|outputs| lists.  When 'return =
  * 'states the trajectory is the full state vector at each sample.
+ *
+ * Events: `'events = [[g_1, R_1], [g_2, R_2], ...]` where each `g_i' is
+ * a Maxima expression in the state symbols (and optionally `t') whose
+ * zero crossings the integrator detects, and each `R_i' is a list of
+ * state-reset equations like `[v = -e*v, h = 0]' applied at the event.
+ * Variables not mentioned in `R_i' keep their current value through
+ * the event.  Mod_simulate_nonlinear integrates segment-by-segment
+ * between requested times, restarting CVODE from the post-reset state
+ * each time an event fires.
  */
 mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
-  [opts1, dt, params, method, rtol, atol, return_what,
+  [opts1, dt, params, method, rtol, atol, return_what, events_in,
+   event_exprs, reset_rules,
    states, inputs, outputs,
    der_eqs, alg_eqs, output_eqs,
    param_subst, der_exprs, output_exprs,
@@ -80,6 +116,7 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   rtol        : mod__opts_get(opts1, 'rtol,   1.0e-8),
   atol        : mod__opts_get(opts1, 'atol,   1.0e-8),
   return_what : mod__opts_get(opts1, 'return, 'outputs),
+  events_in   : mod__opts_get(opts1, 'events, []),
 
   states  : mod_get(m, 'states),
   inputs  : mod_get(m, 'inputs),
@@ -95,6 +132,12 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
     param_subst : append(params, param_subst),
   der_exprs    : map(lambda([e], subst(param_subst, e[2])), der_eqs),
   output_exprs : map(lambda([e], subst(param_subst, e[2])), output_eqs),
+  /* Bake parameters into event expressions too, so np_cvode's
+     compiled root function only sees `[t, x1, ..., xn]'.  The reset
+     rules keep their parameters symbolic — mod__apply_reset gets the
+     param_subst as an extra subst list. */
+  event_exprs : map(lambda([ev], subst(param_subst, ev[1])), events_in),
+  reset_rules : map(second, events_in),
 
   /* Use np_cvode's expression mode (compiles the RHS into native Lisp
      closures — much faster than function mode).  Evaluate u_fn at the
@@ -113,14 +156,80 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   nt     : floor(t_end / dt) + 1,
   t_list : makelist(k * dt, k, 0, nt - 1),
 
-  /* Run the integrator.  traj is an ndarray [nt, 1+n]:
-     col 0 = time, cols 1..n = state values. */
-  traj : np_cvode(rhs_exprs, vars_list, x0_vec, t_list, rtol, atol, method),
-
-  /* Pull out the state trajectory and (if requested) compute outputs. */
-  x_traj : makelist(makelist(np_ref(traj, k, i),
-                             i, 1, n),
-                    k, 0, nt - 1),
+  /* Run the integrator.  Two paths:
+       - No events: one np_cvode call covers the full tspan.
+       - With events: integrate segment-by-segment between requested
+         times.  When CVODE reports a zero-crossing of one of the
+         event expressions, apply the corresponding reset rule and
+         restart CVODE from the post-reset state. */
+  if length(events_in) = 0 then (
+    traj : np_cvode(rhs_exprs, vars_list, x0_vec, t_list, rtol, atol, method),
+    x_traj : makelist(makelist(np_ref(traj, k, i), i, 1, n),
+                      k, 0, nt - 1)
+  ) else (
+    /* Event re-detection guard.  By construction, the post-reset
+       state sits ON the event boundary (h ≈ 0 for a bouncing ball),
+       so CVODE's rootfinder will detect another zero crossing as soon
+       as we restart.  Two complementary defenses:
+         1. Advance the post-reset state by a tiny Euler half-step
+            (small_dt * der at the new state), pushing it off the
+            boundary in the direction the dynamics naturally take it.
+         2. Keep a `last_event_t' watchdog with a wider dedup window
+            so any residual re-detection after a bounce is rejected. */
+    block([current_state : x0_vec, k, max_iters,
+           event_dedup_eps : 1.0e-3, last_event_t : -1.0e308,
+           nudge_dt : 1.0e-4],
+      x_traj : [x0_vec],
+      for k : 2 thru nt do block(
+        [next_t : t_list[k], current_t : t_list[k - 1],
+         iter : 0, sub_tspan, result, traj_seg, evs, ev,
+         t_ev, y_ev, ev_idx, nrows, accepted, post_state, der_now,
+         state_subst, j],
+        max_iters : 100,
+        while current_t < next_t and iter < max_iters do (
+          iter : iter + 1,
+          sub_tspan : [current_t, next_t],
+          result : np_cvode(rhs_exprs, vars_list, current_state,
+                             sub_tspan, rtol, atol, method, event_exprs),
+          traj_seg : first(result),
+          evs : second(result),
+          /* Drop events too close in time to the last accepted one. */
+          accepted : sublist(evs, lambda([e],
+                              e[1] > last_event_t + event_dedup_eps)),
+          if length(accepted) = 0 then (
+            /* No (real) event in this segment — finished. */
+            nrows : first(np_shape(traj_seg)),
+            current_state : makelist(np_ref(traj_seg, nrows - 1, i),
+                                     i, 1, n),
+            current_t : next_t
+          ) else (
+            /* Event fired — apply reset, then nudge state forward by
+               an Euler half-step so the next CVODE call doesn't see
+               g(t) on the boundary. */
+            ev : first(accepted),
+            t_ev : ev[1],
+            y_ev : ev[2],
+            ev_idx : first(ev[3]),
+            post_state : mod__apply_reset(reset_rules[ev_idx + 1],
+                                           y_ev, t_ev, states,
+                                           param_subst),
+            state_subst : append([t = t_ev + nudge_dt],
+                                 makelist(states[j] = post_state[j],
+                                          j, 1, n)),
+            der_now : map(lambda([e], float(subst(state_subst, e))),
+                          rhs_exprs),
+            current_state : makelist(post_state[j]
+                                      + nudge_dt * der_now[j],
+                                     j, 1, n),
+            current_t     : t_ev + nudge_dt,
+            last_event_t  : t_ev
+          )),
+        if iter >= max_iters then
+          error("mod_simulate_nonlinear: too many events near t = ",
+                current_t, " (Zeno-like behaviour or misconfigured event)"),
+        x_traj : endcons(current_state, x_traj))
+    )
+  ),
   if return_what = 'states then
     return([t_list, x_traj]),
 

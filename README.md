@@ -12,13 +12,14 @@ Early prototype. Handles a *useful subset* of Modelica:
 - **Equation-composed multi-component models** (e.g. `tank1.q_in = source;` wiring instances by direct assignment — see `examples/TwoTanks.mo`).
 - **Connector-composed multi-component models** with `connect(a.port, b.port)` and `flow`-marked variables — see `examples/RCFilter.mo`. rumoca expands the connectors into Kirchhoff-style equations; mochi translates dotted names to Maxima-safe identifiers, auto-detects instance inputs by walking class declarations, and treats connector-internal variables as algebraics.
 - **`extends` inheritance** for component reuse — see `examples/extends/RCFilterExtends.mo` (a small electrical-component library with a `partial model OnePort` base class). rumoca flattens the hierarchy; mochi walks the source's `extends` clauses transitively to inherit `input`/`output` declarations from base classes.
+- **Discrete events / hybrid systems** (opt-in, via `mochi-nonlinear`) — `when` clauses with `reinit(state, expr)` resets, see `examples/BouncingBall.mo`. The `'events` opt to `mod_simulate_nonlinear` watches a list of `[event_expr, reset_eqs]` pairs; CVODE detects zero crossings and the loop applies the resets.
 - Declarations of parameters, state variables (with `der(...)`), inputs, outputs.
 - Continuous-time equations.
 - The standard Modelica builtins (`sin`, `cos`, `exp`, `sqrt`, `log`, ...).
 - **Linear analysis** (built in): state-space linearisation, transfer functions, step/impulse/arbitrary-input simulation of the linearised model, plant composition.
 - **Nonlinear simulation** (opt-in `mochi-nonlinear` subsystem): direct integration of the original nonlinear DAE via SUNDIALS CVODE — no linearisation, no operating-point assumption. Adams (non-stiff) and BDF (stiff) methods.
 
-Not yet supported: multi-file projects (rumoca's `--source-root`), conditional declarations, discrete events, FMU export.
+Not yet supported: multi-file projects (rumoca's `--source-root`), conditional declarations, FMU export.
 
 ## Prerequisites
 
@@ -183,6 +184,7 @@ See `examples/`:
 - `TwoTanks.mo` — same as DoubleTank but built from two `Tank` *instances* connected by direct equations. Demonstrates dotted-name flattening and algebraic-variable handling.
 - `RCFilter.mo` — RC low-pass filter using proper Modelica `connect(...)` syntax over an `ElectricalPin` connector class. Demonstrates flow/potential expansion and per-instance input detection.
 - `Pendulum.mo` — damped pendulum with `sin(theta)` gravity term — used by the nonlinear-simulation notebook.
+- `BouncingBall.mo` — classic hybrid-system test case. Continuous free-fall plus a `when h <= 0 and v < 0 then reinit(v, -e * pre(v))` clause for the ground impact. Demonstrates discrete events via the `mochi-nonlinear` subsystem's `'events` opt.
 - `extends/RCFilterExtends.mo` — same RC filter as above, but composed from a `partial model OnePort` base class that Resistor / Capacitor / VoltageSource extend. Demonstrates `extends` inheritance: rumoca flattens the hierarchy and mochi follows the parent chain to inherit `input` / `output` declarations.
 
 ### Notebooks
@@ -215,7 +217,7 @@ and `aximar-mcp` on `$PATH` — or override via `make AXIMAR_MCP=/path/to/aximar
 - [ ] Connector models (electrical / mechanical / thermal connectors)
 - [x] Direct nonlinear simulation via `np_cvode` (`mochi-nonlinear` subsystem)
 - [ ] DAE simulation via SUNDIALS IDA for index-1 algebraic loops that can't be symbolically causalised
-- [ ] Discrete events / hybrid systems (`when`, `reinit`, ideal switches)
+- [x] Discrete events / hybrid systems (`when`, `reinit`) — `examples/BouncingBall.mo`. Ideal switches and full multi-event coordination are still TODO.
 - [ ] `mod_export_state_space(m, file)` to dump the symbolic SS form
 
 ## License

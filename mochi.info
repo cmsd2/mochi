@@ -1,4 +1,4 @@
-This is mochi.info, produced by makeinfo version 7.1 from mochi.texi.
+This is mochi.info, produced by makeinfo version 7.3 from mochi.texi.
 
 
 File: mochi.info,  Node: Top,  Next: Package mochi,  Up: (dir)
@@ -368,9 +368,45 @@ File: mochi.info,  Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts],
              • ‘atol’ -- absolute tolerance (default ‘1e-8’).
              • ‘return’ -- ‘'outputs’ (default) or ‘'states’ to get the
                full state trajectory instead of the output trajectory.
+             • ‘events’ -- list of ‘[event_expr, reset_eqs]’ pairs for
+               hybrid systems (see below).
 
      Returns ‘[t_list, y_list]’.  For SISO ‘y_list’ is a flat list; for
      multi-output it's a list of length-‘|outputs|’ lists.
+
+* Menu:
+
+     * Discrete events::
+
+
+File: mochi.info,  Node: Discrete events,  Up: Subsystem mochi-nonlinear
+
+1.3.1 Discrete events
+---------------------
+
+For models with ‘when’ clauses (Modelica's discrete-event mechanism),
+pass an ‘'events’ list of ‘[event_expr, reset_eqs]’ pairs:
+
+[t, x] : mod_simulate_nonlinear(m_ball, [10.0, 0.0],
+                                lambda([t], []),
+                                5.0,
+                                ['return = 'states,
+                                 'events = [[h, [v = -e * v]]]])$
+
+   • ‘event_expr’ is a Maxima expression in the state symbols.  Its zero
+     crossings (detected by SUNDIALS' rootfinder) trigger the event.
+   • ‘reset_eqs’ is a list of state-reset equations like ‘[v = -e * v]’
+     applied at the event time to compute the post-event state.
+     Variables not mentioned keep their current value.
+
+The integrator runs segment-by-segment between requested sample times,
+restarting CVODE from the post-reset state each time an event fires.
+After each reset the state is nudged forward by a tiny Euler half-step
+(‘1e-4’ s by default) to push it off the event boundary, avoiding
+spurious re-detection of the same zero-crossing.  There's also a
+watchdog limit of 100 events per segment to break Zeno-like loops.
+
+See ‘examples/BouncingBall.mo’ for a complete worked example.
 
 
 File: mochi.info,  Node: Function mod_step_nonlinear m x0 t_end [opts],  Next: Function mod_impulse_nonlinear m x0 t_end [opts],  Prev: Function mod_simulate_nonlinear m x0 u_fn t_end [opts],  Up: Subsystem mochi-nonlinear
@@ -490,71 +526,41 @@ Appendix A Function and variable index
 * mod_unity_feedback:                    Function mod_unity_feedback SS K.
                                                                 (line 3)
 
-
 
 Tag Table:
 Node: Top71
 Node: Package mochi174
-Ref: #package-mochi307
 Node: Introduction to mochi458
-Ref: #introduction-to-mochi611
 Node: Definitions for mochi1085
-Ref: #definitions-for-mochi1272
 Node: Function mod_load path2165
-Ref: #function-mod_load-path2303
 Node: Function mod_print m3122
-Ref: #function-mod_print-m3302
 Node: Function mod_state_space m op_point3337
-Ref: #function-mod_state_space-m-op_point3562
 Node: Function mod_state_space m op_point override_params3563
-Ref: #function-mod_state_space-m-op_point-override_params3829
 Node: Function mod_state_space_symbolic m op_point4332
-Ref: #function-mod_state_space_symbolic-m-op_point4605
 Node: Function mod_simulate m op_point u_fn t_end [opts]4950
-Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5222
 Node: Function mod_step m op_point t_end [opts]5747
-Ref: #function-mod_step-m-op_point-t_end-opts6009
 Node: Function mod_impulse m op_point t_end [opts]6010
-Ref: #function-mod_impulse-m-op_point-t_end-opts6253
 Node: Function mod_cascade SS1 SS26787
-Ref: #function-mod_cascade-ss1-ss27000
 Node: Function mod_parallel SS1 SS27001
-Ref: #function-mod_parallel-ss1-ss27203
 Node: Function mod_unity_feedback SS K7204
-Ref: #function-mod_unity_feedback-ss-k7422
 Node: Function mod_transfer_function m op_point8063
-Ref: #function-mod_transfer_function-m-op_point8318
 Node: Function mod_transfer_function m op_point override_params8319
-Ref: #function-mod_transfer_function-m-op_point-override_params8581
 Node: Function mod_get m key8903
-Ref: #function-mod_get-m-key9113
 Node: Function mod__causalise m9183
-Ref: #function-mod__causalise-m9377
 Node: Function mod_dataflow m op_point [opts]10332
-Ref: #function-mod_dataflow-m-op_point-opts10550
 Node: Function mod_to_dot m op_point11511
-Ref: #function-mod_to_dot-m-op_point11740
 Node: Function mod_to_dot m op_point override_params11741
-Ref: #function-mod_to_dot-m-op_point-override_params11982
 Node: Function mod_to_mermaid m op_point11983
-Ref: #function-mod_to_mermaid-m-op_point12231
 Node: Function mod_to_mermaid m op_point override_params12232
-Ref: #function-mod_to_mermaid-m-op_point-override_params12489
 Node: Function mod_diagram m op_point [opts]12682
-Ref: #function-mod_diagram-m-op_point-opts12884
 Node: Subsystem mochi-nonlinear14200
-Ref: #subsystem-mochi-nonlinear14383
 Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]15044
-Ref: #function-mod_simulate_nonlinear-m-x0-u_fn-t_end-opts15279
-Node: Function mod_step_nonlinear m x0 t_end [opts]16452
-Ref: #function-mod_step_nonlinear-m-x0-t_end-opts16734
-Node: Function mod_impulse_nonlinear m x0 t_end [opts]16735
-Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts16957
-Node: Example17142
-Ref: #example17308
-Node: Note mod_load does not touch session state18190
-Ref: #note-mod_load-does-not-touch-session-state18402
-Node: Function and variable index18858
+Node: Discrete events16611
+Node: Function mod_step_nonlinear m x0 t_end [opts]17963
+Node: Function mod_impulse_nonlinear m x0 t_end [opts]18246
+Node: Example18653
+Node: Note mod_load does not touch session state19701
+Node: Function and variable index20369
 
 End Tag Table
 
