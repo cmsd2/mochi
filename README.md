@@ -19,7 +19,7 @@ Early prototype. Handles a *useful subset* of Modelica:
 - **Linear analysis** (built in): state-space linearisation, transfer functions, step/impulse/arbitrary-input simulation of the linearised model, plant composition.
 - **Nonlinear simulation** (opt-in `mochi-nonlinear` subsystem): direct integration of the original nonlinear DAE via SUNDIALS CVODE — no linearisation, no operating-point assumption. Adams (non-stiff) and BDF (stiff) methods.
 
-Not yet supported: multi-file projects (rumoca's `--source-root`), conditional declarations, FMU export.
+Not yet supported: conditional declarations, FMU export. Modelica Standard Library is supported via rumoca's `--source-root` mechanism — see below.
 
 ## Prerequisites
 
@@ -31,6 +31,35 @@ Not yet supported: multi-file projects (rumoca's `--source-root`), conditional d
 Optional, only for the `mochi-nonlinear` subsystem:
 
 - [`numerics-sundials`](https://github.com/cmsd2/numerics-sundials) — `mxpm install numerics-sundials`. Brings in SUNDIALS C bindings; needed only if you want to integrate the nonlinear DAE directly. Pure linear analysis (state-space, Bode, transfer fn, dataflow diagrams) doesn't need it.
+
+Optional, for using Modelica Standard Library components in your `.mo` files:
+
+- The [Modelica Standard Library](https://github.com/modelica/ModelicaStandardLibrary) (MSL 4.x) at any directory `D` such that `D/Modelica/package.mo` exists.
+
+  Tell mochi where to find it:
+
+  - **`MODELICAPATH` environment variable** (the standard Modelica-tools convention, defined in [MLS §13.2.4](https://specification.modelica.org/master/packages.html#mapping-package-class-structures-to-a-hierarchical-file-system)). Colon-separated on Unix, semicolon-separated on Windows. Example:
+
+    ```sh
+    export MODELICAPATH=/path/to/your/clone
+    ```
+
+  - **Or programmatically from Maxima:**
+
+    ```maxima
+    mod_set_source_root("/path/to/clone1", "/path/to/clone2")$
+    /* or */
+    mod_add_source_root("/path/to/clone")$
+    ```
+
+  - **OpenModelica users** get auto-discovery for free: if neither `MODELICAPATH` nor the API is set, mochi falls back to `$OPENMODELICAHOME/lib/omlibrary/Modelica*/` (the OM-managed install location, defaulting to `/opt/openmodelica` if `OPENMODELICAHOME` isn't exported). No fabricated paths beyond that.
+
+  Run `mod_source_roots()` to inspect the resolved list. If you don't have MSL installed and aren't using OpenModelica, get a fresh clone:
+
+  ```sh
+  git clone --depth 1 --branch v4.0.0 https://github.com/modelica/ModelicaStandardLibrary
+  export MODELICAPATH="$PWD/ModelicaStandardLibrary"
+  ```
 
 The `RUMOCA_BIN` environment variable can override the rumoca path; otherwise the loader looks in `$PATH` and `~/.cargo/bin`.
 
@@ -186,6 +215,7 @@ See `examples/`:
 - `Pendulum.mo` — damped pendulum with `sin(theta)` gravity term — used by the nonlinear-simulation notebook.
 - `BouncingBall.mo` — classic hybrid-system test case. Continuous free-fall plus a `when h <= 0 and v < 0 then reinit(v, -e * pre(v))` clause for the ground impact. Demonstrates discrete events via the `mochi-nonlinear` subsystem's `'events` opt.
 - `extends/RCFilterExtends.mo` — same RC filter as above, but composed from a `partial model OnePort` base class that Resistor / Capacitor / VoltageSource extend. Demonstrates `extends` inheritance: rumoca flattens the hierarchy and mochi follows the parent chain to inherit `input` / `output` declarations.
+- `msl/RCFilterMSL.mo` — same RC filter again, but built from `Modelica.Electrical.Analog.Basic.{Resistor, Capacitor, Ground}` and `Modelica.Electrical.Analog.Sources.SignalVoltage` from the Modelica Standard Library. No hand-rolled connectors or base classes. Requires MSL installed (see Prerequisites). Linearises to identical `A = -2, B = 2, C = 1, D = 0`.
 
 ### Notebooks
 
@@ -214,8 +244,9 @@ and `aximar-mcp` on `$PATH` — or override via `make AXIMAR_MCP=/path/to/aximar
 ## Roadmap
 
 - [x] `extends` inheritance for component reuse (single-file; `examples/extends/RCFilterExtends.mo`).
-- [ ] Multi-file `.mo` projects via rumoca's `--source-root`.
-- [ ] Connector models (electrical / mechanical / thermal connectors)
+- [x] Multi-file `.mo` projects via rumoca's `--source-root` (`MODELICAPATH` env var + auto-discovery).
+- [x] Modelica Standard Library integration for plants and analyses (`examples/msl/`). MSL Blocks (controllers like PID) load but their linearisation has known issues with `If`-gated branches and Boolean parameters — usable for nonlinear simulation, not yet for state-space.
+- [x] Connector models (electrical / mechanical / thermal connectors) — covered by MSL.
 - [x] Direct nonlinear simulation via `np_cvode` (`mochi-nonlinear` subsystem)
 - [ ] DAE simulation via SUNDIALS IDA for index-1 algebraic loops that can't be symbolically causalised
 - [x] Discrete events / hybrid systems (`when`, `reinit`) — `examples/BouncingBall.mo`. Ideal switches and full multi-event coordination are still TODO.

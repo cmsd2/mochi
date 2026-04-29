@@ -1,0 +1,84 @@
+/* Tests for MSL (Modelica Standard Library) integration.
+
+   These tests REQUIRE the Modelica Standard Library installed at one
+   of the source-root locations mochi searches.  See the README's
+   "Modelica Standard Library" section for installation instructions.
+
+   If MSL is not available, every test below will fail with a clear
+   rumoca-exit-code error from the first mod_load. */
+
+(load("mochi"), true);
+true;
+
+/* mod_source_roots() should be non-empty (either via env or auto-discovery)
+   for these tests to work. */
+is(length(mod_source_roots()) > 0);
+true;
+
+/* ---- RCFilterMSL: same dynamics as the hand-rolled RCFilter ---- */
+
+(m_msl : mod_load("examples/msl/RCFilterMSL.mo"), true);
+true;
+
+mod_get(m_msl, 'name);
+"RCFilterMSL";
+
+/* MSL Capacitor declares its voltage as the state. */
+length(mod_get(m_msl, 'states));
+1;
+
+mod_get(m_msl, 'states);
+[c1_v];
+
+mod_get(m_msl, 'inputs);
+[Vin];
+
+mod_get(m_msl, 'outputs);
+[Vcap];
+
+/* Linearisation should match the hand-rolled RCFilter (A=-2, B=2, C=1, D=0).
+   Default R=1, C=0.5 → A = -1/(R*C) = -2. */
+([Amsl, Bmsl, Cmsl, Dmsl] :
+   mod_state_space(m_msl, [c1_v = 0, Vin = 0]),
+ true);
+true;
+
+Amsl;
+matrix([-2.0]);
+
+Bmsl;
+matrix([2.0]);
+
+Cmsl;
+matrix([1.0]);
+
+/* DC gain = 1, step settles at 1.0. */
+([t_msl, y_msl] : mod_step(m_msl, [c1_v = 0, Vin = 0], 5.0), true);
+true;
+
+is(abs(last(y_msl) - 1.0) < 0.01);
+true;
+
+/* ---- mod_set_source_root / mod_add_source_root API ---- */
+
+/* Save current state, then test the API. */
+(saved_roots : mod_source_roots(), true);
+true;
+
+/* Setting an empty list drops user extras; auto-discovery / env still
+   contribute, so the result depends on the environment.  Just verify
+   the call succeeds. */
+mod_set_source_root();
+done;
+
+/* Adding a clearly-bogus path doesn't break anything (rumoca will just
+   not find anything there).  Verify the path appears in the list. */
+mod_add_source_root("/tmp/definitely-not-a-real-modelica-path");
+done;
+
+is(member("/tmp/definitely-not-a-real-modelica-path", mod_source_roots()));
+true;
+
+/* Reset to clean state. */
+mod_set_source_root();
+done;

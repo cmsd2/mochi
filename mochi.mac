@@ -201,6 +201,27 @@ mod_state_space_symbolic(m, op_point) := block(
    subst(op_point, C),
    subst(op_point, D)])$
 
+/* Resolve a parameter list to a flat substitution list with all
+   inter-parameter references chased down.  rumoca emits MSL parameters
+   with their declared default expressions (e.g. `D.T = max({Td/Nd,
+   100*1e-15})`), which mochi-loader turns into Maxima expressions —
+   they need to be substituted into each other iteratively until they
+   reduce to numbers.  USER_OVERRIDES (a list of equations) is applied
+   on top.  Returns a list of equations suitable for one-shot subst. */
+mod__resolve_params(params, user_overrides) := block(
+  [eqs, prev, n_iter],
+  eqs : map(lambda([p], p[1] = p[2]), params),
+  if length(user_overrides) > 0 then
+    /* User overrides go first so they shadow defaults during chaining. */
+    eqs : append(user_overrides, eqs),
+  prev : [],
+  n_iter : 0,
+  while eqs # prev and n_iter < 20 do (
+    prev : eqs,
+    eqs : map(lambda([eq], lhs(eq) = subst(prev, rhs(eq))), eqs),
+    n_iter : n_iter + 1),
+  eqs)$
+
 /* Numeric state-space.
      mod_state_space(m, op_point)            — use default parameters
      mod_state_space(m, op_point, params)    — override parameters
@@ -209,9 +230,10 @@ mod_state_space(m, op_point, [override_params]) := block(
   [A, B, C, D, params, param_subst, op_subst, full_subst],
   [A, B, C, D] : mod__symbolic_ss(m),
   params : mod_get(m, 'params),
-  param_subst : map(lambda([p], p[1] = p[2]), params),
-  if length(override_params) > 0 then
-    param_subst : append(override_params[1], param_subst),
+  param_subst : mod__resolve_params(params,
+                                     if length(override_params) > 0
+                                       then override_params[1]
+                                       else []),
   full_subst : append(param_subst, op_point),
   A : float(subst(full_subst, A)),
   B : float(subst(full_subst, B)),

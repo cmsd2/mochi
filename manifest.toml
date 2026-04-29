@@ -18,4 +18,11 @@ quicklisp_systems = ["cl-json"]
 # rtest_mochi.mac covers the core (mod_load + linear analysis +
 # diagrams).  rtest_mochi_nonlinear.mac covers the opt-in
 # mochi-nonlinear subsystem; it requires numerics-sundials installed.
-files = ["rtest_mochi.mac", "rtest_mochi_nonlinear.mac"]
+# rtest_mochi_msl.mac covers MSL integration; it requires the Modelica
+# Standard Library installed at one of the auto-discovery locations
+# (see the file header).
+files = [
+    "rtest_mochi.mac",
+    "rtest_mochi_nonlinear.mac",
+    "rtest_mochi_msl.mac",
+]
