@@ -992,11 +992,73 @@ inputs."
                                         cond-pretty)))
                   detectors))))))
 
-(defun mochi--extract-events (raw-fz)
-  "Build the events list for the model struct.  Maps every f_z entry
-   through mochi--fz-to-events (which may produce multiple tuples per
-   entry) and flattens into a single Maxima list."
-  (mochi--mlist (mapcan #'mochi--fz-to-events raw-fz)))
+(defun mochi--fc-to-events (fc-entry already-covered-conds)
+  "Convert one rumoca f_c entry to a list of detector-only event tuples
+   `(detector empty-reset true cond-pretty)' — one per primitive
+   detector in the boolean condition.  Used for bare `if'-in-equation
+   relations that rumoca surfaces as conditions but with no `reinit',
+   so we want CVODE to detect the boundary cleanly without changing
+   state.  Returns nil if:
+
+     - the condition is already covered by an f_z-derived event (a
+       `when' clause) — we don't double up; or
+     - the condition isn't a comparison-shaped expression we can
+       turn into a real-valued detector (e.g. a bare Boolean variable
+       reference — PID's `local_reset' — which is a discrete-mode
+       flag rather than a continuous-state boundary).
+
+   ALREADY-COVERED-CONDS is a list of cond-pretty Maxima expressions
+   already produced by mochi--fz-to-events."
+  (let* ((cond-node (mochi--get fc-entry :rhs))
+         (det-result (errcatch-mochi
+                      (lambda ()
+                        (list (mochi--cond-to-detectors cond-node)
+                              (mochi--cond-pretty       cond-node))))))
+    (when det-result
+      (let* ((detectors   (first  det-result))
+             (cond-pretty (second det-result))
+             (covered     (member cond-pretty already-covered-conds
+                                  :test #'equal))
+             (empty-reset (mochi--mlist '())))
+        (unless covered
+          (mapcar (lambda (det)
+                    (mochi--mlist (list (first det)
+                                        empty-reset
+                                        t
+                                        cond-pretty)))
+                  detectors))))))
+
+(defun errcatch-mochi (thunk)
+  "Run THUNK, returning its result on success or NIL on any error.
+   Used to skip f_c entries whose condition AST isn't shaped like a
+   real-valued boundary detector."
+  (handler-case (funcall thunk)
+    (error () nil)))
+
+(defun mochi--extract-events (raw-fz raw-fc)
+  "Build the events list for the model struct.  Two passes:
+     1. Maps every f_z entry (state-reset rules from `when' clauses)
+        through mochi--fz-to-events.
+     2. For each f_c entry (a Modelica relation that should generate an
+        implicit event) not already covered by an f_z, synthesize a
+        detector-only event with no reset rule.  This lets CVODE's
+        rootfinder stop cleanly at boundaries from bare `if'-in-equation
+        switches (saturation, sign-flips, ideal diodes), instead of
+        trying to step over the discontinuity with adaptive step sizes.
+
+   Both pass results are flattened into one Maxima list."
+  (let* ((fz-events (mapcan #'mochi--fz-to-events raw-fz))
+         ;; Each fz-event is `((mlist) detector reset guard cond-pretty)'.
+         ;; cond-pretty is element 4 (index 3 in the cdr); pull out the
+         ;; covered conditions to dedupe against.
+         (covered-conds (remove-duplicates
+                         (mapcar (lambda (ev) (fourth (cdr ev)))
+                                 fz-events)
+                         :test #'equal))
+         (fc-events (mapcan (lambda (entry)
+                              (mochi--fc-to-events entry covered-conds))
+                            raw-fc)))
+    (mochi--mlist (append fz-events fc-events))))
 
 ;; --- Build the Maxima struct -------------------------------------------
 
@@ -1107,6 +1169,7 @@ uses that as the explicit model name to compile."
          (raw-algebraics (cdr (assoc :y model)))
          (raw-eqs (cdr (assoc :f--x model)))
          (raw-fz (cdr (assoc :f--z model)))
+         (raw-fc (cdr (assoc :f--c model)))
          (residual-exprs (mapcar (lambda (e)
                                    (mochi--ast-to-maxima (mochi--get e :residual)))
                                  raw-eqs)))
@@ -1149,4 +1212,4 @@ uses that as the explicit model name to compile."
                (mochi--mequal '$outputs (mochi--mlist output-syms))
                (mochi--mequal '$initial (mochi--initial-list raw-states))
                (mochi--mequal '$residuals (mochi--mlist residual-exprs))
-               (mochi--mequal '$events (mochi--extract-events raw-fz))))))))
+               (mochi--mequal '$events (mochi--extract-events raw-fz raw-fc))))))))

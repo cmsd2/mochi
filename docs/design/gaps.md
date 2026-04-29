@@ -41,14 +41,17 @@ expression and re-evaluates at each integration step.
 See `examples/SwitchedRC.mo` and the regime-aware tests at the end
 of `rtest_mochi.mac` for the worked example.
 
-Caveat: this fix doesn't auto-detect `if`s in equations as discrete
-events the way Modelica's full semantics technically does. A bare
-`if x > 0 then a else b` (no enclosing `when`) is a continuous
-expression in mochi's nonlinear sim — CVODE's adaptive step size
-will work through it, but the integrator slows down and can lose
-accuracy near the boundary. The principled way to mark a switch as
-an event is to use `when (x > 0)` in the `.mo` file, which mochi-
-nonlinear's auto-extraction wires into CVODE's rootfinder.
+Companion fix: `mochi--extract-events` also walks rumoca's `f_c`
+block now, not just `f_z`. rumoca surfaces the condition for every
+`if`-in-equation relation (Modelica Language Spec §8.5: relations on
+continuous variables generate implicit events whether or not the
+user wrapped them in a `when`); mochi synthesises a detector-only
+event for each one not already covered by an `f_z`. Empty `reset_eqs`,
+guard = `true`. The role: tell CVODE to stop cleanly at the
+discontinuity rather than try to step over it with adaptive step
+sizes. Without this, `mod_simulate_nonlinear` on `SwitchedRC` still
+worked but step counts ballooned near the boundary; with it, CVODE
+detects the crossing precisely and resumes on the other side.
 
 ### 2. `assert(...)` statements are silently dropped
 

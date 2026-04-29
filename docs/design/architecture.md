@@ -421,6 +421,30 @@ boolean preserved in Maxima form so `mod_print` can render `when h
 <= 0 and v < 0 : [v = -e*v]` (rather than the derived `min(-h, -v)`
 guard, which is correct but unhelpful for the reader).
 
+`mochi--extract-events` also walks rumoca's `f_c` block — the
+*condition equations* — to capture implicit events from bare `if`s
+in continuous equations (Modelica Language Spec §8.5: relations on
+continuous variables generate implicit events whether or not the
+user wrapped them in a `when`). For each `f_c` entry whose condition
+isn't already covered by an `f_z`, mochi synthesises a *detector-
+only* event: empty `reset_eqs` (state stays unchanged), `guard =
+true` (always accept). The role: tell CVODE to stop at the
+discontinuity, not to step over it. Without this, a model like
+`der(x) = if x > 0 then a(x,u) else b(x,u)` integrates correctly but
+slowly — CVODE takes a step over the boundary, error estimates blow
+up, step gets halved and retried until the integrator stumbles
+through. With the f_c-derived event, CVODE stops cleanly at the
+zero crossing and resumes on the other side. See
+`examples/SwitchedRC.mo`.
+
+f_c entries whose condition isn't a comparison-shaped expression
+(e.g. PID's `local_reset` Boolean variable being checked directly)
+are silently skipped — they're discrete-mode flags rather than
+continuous-state boundary detectors, and CVODE has no way to detect
+"a Boolean became true" anyway. mochi swallows the AST-walker error
+via an `errcatch-mochi` wrapper so the rest of the model still
+loads.
+
 ## Diagrams
 
 `mod_diagram(m, op_point)` renders the dataflow as inline SVG. The
