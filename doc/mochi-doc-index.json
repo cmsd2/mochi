@@ -1,7 +1,7 @@
 {
   "version": 1,
   "package": "mochi",
-  "source": "./doc/mochi.md",
+  "source": "doc/mochi.md",
   "symbols": {
     "mod__causalise": {
       "type": "Function",

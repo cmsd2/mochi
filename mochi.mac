@@ -222,23 +222,68 @@ mod__resolve_params(params, user_overrides) := block(
     n_iter : n_iter + 1),
   eqs)$
 
+/* Constant-fold an expression after parameter substitution.  Used by
+   mod_state_space to collapse parameter-gated `if'/mcond branches that
+   Maxima's lazy simplifier doesn't reduce until forced.  The classic
+   case is MSL's PID emitting `if D.zeroGain then 0 else (u-x)/D.T':
+   after `D.zeroGain' is substituted to `false', Maxima keeps the
+   condition unevaluated until `ev(.., eval)' runs through it.  Without
+   this step, `diff(.., u)' gets a piecewise expression rather than
+   `1/D.T', and downstream substitutions can fail with confusing
+   errors like `0 to a negative exponent' or `diff: variable must not
+   be a number'. */
+mod__simplify_expr(expr) := ev(expr, eval)$
+
 /* Numeric state-space.
      mod_state_space(m, op_point)            — use default parameters
      mod_state_space(m, op_point, params)    — override parameters
-   Returns A, B, C, D as Maxima matrices of floats. */
+   Returns A, B, C, D as Maxima matrices of floats.
+
+   Order of operations (matters for models with parameter-gated `If'
+   branches in their residuals — e.g. anything from MSL Blocks):
+     1. Causalise the residuals to get explicit f(x, u, p), y(x, u, p).
+     2. Substitute parameters into f_expr / y_expr.
+     3. Force evaluation (collapse if-then-else with literal cond).
+     4. Differentiate to get the Jacobians (the operating point is
+        symbolic at this point — substituted last).
+     5. Substitute the operating point and float to numeric matrices. */
 mod_state_space(m, op_point, [override_params]) := block(
-  [A, B, C, D, params, param_subst, op_subst, full_subst],
-  [A, B, C, D] : mod__symbolic_ss(m),
+  [params, param_subst, der_eqs, alg_eqs, output_eqs,
+   f_expr, y_expr, states, inputs, outputs, n, ni, no, A, B, C, D],
+  states  : mod_get(m, 'states),
+  inputs  : mod_get(m, 'inputs),
+  outputs : mod_get(m, 'outputs),
+  n  : length(states),
+  ni : length(inputs),
+  no : length(outputs),
+  [der_eqs, alg_eqs, output_eqs] : mod__causalise(m),
   params : mod_get(m, 'params),
   param_subst : mod__resolve_params(params,
                                      if length(override_params) > 0
                                        then override_params[1]
                                        else []),
-  full_subst : append(param_subst, op_point),
-  A : float(subst(full_subst, A)),
-  B : float(subst(full_subst, B)),
-  C : float(subst(full_subst, C)),
-  D : float(subst(full_subst, D)),
+  /* Substitute parameters first, then constant-fold, THEN differentiate
+     so any if-branches gated by parameters collapse to a single
+     branch before the Jacobian sees them. */
+  f_expr : map(lambda([e], mod__simplify_expr(subst(param_subst, e[2]))),
+               der_eqs),
+  y_expr : map(lambda([e], mod__simplify_expr(subst(param_subst, e[2]))),
+               output_eqs),
+  A : genmatrix(lambda([i, j], diff(f_expr[i], states[j])),  n, n),
+  B : if ni > 0 then genmatrix(lambda([i, j], diff(f_expr[i], inputs[j])),
+                               n, ni)
+      else zeromatrix(n, 0),
+  C : if no > 0 then genmatrix(lambda([i, j], diff(y_expr[i], states[j])),
+                               no, n)
+      else zeromatrix(0, n),
+  D : if (no > 0 and ni > 0)
+        then genmatrix(lambda([i, j], diff(y_expr[i], inputs[j])), no, ni)
+      else zeromatrix(no, ni),
+  /* Operating point is the only thing left symbolic at this stage. */
+  A : float(subst(op_point, A)),
+  B : float(subst(op_point, B)),
+  C : float(subst(op_point, C)),
+  D : float(subst(op_point, D)),
   [A, B, C, D])$
 
 /* ---- Simulation: mod_simulate, mod_step, mod_impulse ------------- */

@@ -228,6 +228,7 @@ that walk through the workflow end-to-end. Rendered markdown copies
 - [`02_multi_component`](docs/notebooks/02_multi_component.md) — multi-instance composition (TwoTanks via direct equations, RCFilter via `connect(...)`) and dataflow-diagram rendering with `mod_diagram`.
 - [`03_nonlinear`](docs/notebooks/03_nonlinear.md) — direct nonlinear simulation via the `mochi-nonlinear` subsystem, with the Pendulum showing where the linearised model and the true `sin(theta)` dynamics visibly diverge.
 - [`04_events`](docs/notebooks/04_events.md) — discrete events / hybrid systems via Modelica's `when` clauses. The bouncing ball: continuous free-fall + a discontinuous velocity reset when the ball hits the floor. Includes the linearised dataflow diagram (continuous part), trajectory plots with and without event handling, and a phase portrait showing the velocity jumps as vertical edges at $h = 0$.
+- [`05_msl`](docs/notebooks/05_msl.md) — modelling with the Modelica Standard Library: source-root discovery, an RC plant built from `Modelica.Electrical.Analog.Basic.{Resistor, Capacitor, Ground}` (matching the hand-rolled version's dynamics), and a closed-loop control system from `Modelica.Blocks.Continuous.{FirstOrder, PID}` + `Modelica.Blocks.Math.Feedback` — linearised end-to-end, with eigenvalues showing the dominant complex pair and the fast derivative-filter pole.
 
 To regenerate the markdown after editing a notebook:
 
@@ -245,7 +246,7 @@ and `aximar-mcp` on `$PATH` — or override via `make AXIMAR_MCP=/path/to/aximar
 
 - [x] `extends` inheritance for component reuse (single-file; `examples/extends/RCFilterExtends.mo`).
 - [x] Multi-file `.mo` projects via rumoca's `--source-root` (`MODELICAPATH` env var + auto-discovery).
-- [x] Modelica Standard Library integration for plants and analyses (`examples/msl/`). MSL Blocks (controllers like PID) load but their linearisation has known issues with `If`-gated branches and Boolean parameters — usable for nonlinear simulation, not yet for state-space.
+- [x] Modelica Standard Library integration for plants and analyses (`examples/msl/`), including `Modelica.Blocks` controllers. The linearisation pipeline does parameter substitution + constant folding before computing the Jacobian, so MSL's `If`-gated branches (e.g. `Modelica.Blocks.Continuous.PID`'s derivative-filter shortcut) collapse to clean state-space matrices.
 - [x] Connector models (electrical / mechanical / thermal connectors) — covered by MSL.
 - [x] Direct nonlinear simulation via `np_cvode` (`mochi-nonlinear` subsystem)
 - [ ] DAE simulation via SUNDIALS IDA for index-1 algebraic loops that can't be symbolically causalised

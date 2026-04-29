@@ -82,3 +82,44 @@ true;
 /* Reset to clean state. */
 mod_set_source_root();
 done;
+
+/* ---- PID closed-loop linearisation ----
+   examples/msl/PIDClosedLoop.mo wires a first-order plant to a PID
+   controller via a Feedback block — all from Modelica.Blocks.  The
+   linearisation stresses the constant-folding pass in mod_state_space:
+   MSL's PID emits parameter-gated If branches (e.g.
+   `if D.zeroGain then 0 else (u-x)/D.T') in its residuals, and the
+   Jacobian sees them only after parameter substitution + ev(., eval). */
+
+(m_pid : mod_load("examples/msl/PIDClosedLoop.mo"), true);
+true;
+
+/* 3 states: plant output, PID integrator, PID derivative filter. */
+length(mod_get(m_pid, 'states));
+3;
+
+/* Linearise around the origin (plant.y = 0, pid.I.y = 0, pid.D.x = 0). */
+([Apid, Bpid, Cpid, Dpid] :
+   mod_state_space(m_pid, [plant_y = 0, pid_I_y = 0, pid_D_x = 0]),
+ true);
+true;
+
+/* A is 3x3. */
+length(Apid);
+3;
+
+length(Apid[1]);
+3;
+
+/* The closed-loop has 3 eigenvalues: one fast real (~ -110, the
+   derivative-filter dynamics) and a complex pair (~ -0.91 +- 0.99j).
+   We don't pin exact values, but the system should be stable —
+   max real-part of eigenvalues < 0. */
+(load("numerics"),
+ [eigvals_pid, _] : np_eig(ndarray(float(Apid))),
+ max_real_pid : lmax(map(realpart, np_to_list(eigvals_pid))),
+ true);
+true;
+
+is(max_real_pid < 0);
+true;
