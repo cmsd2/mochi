@@ -1,4 +1,4 @@
-This is mochi.info, produced by makeinfo version 7.3 from mochi.texi.
+This is mochi.info, produced by makeinfo version 7.1 from mochi.texi.
 
 
 File: mochi.info,  Node: Top,  Next: Package mochi,  Up: (dir)
@@ -557,40 +557,72 @@ Appendix A Function and variable index
 * mod_unity_feedback:                    Function mod_unity_feedback SS K.
                                                                 (line 3)
 
+
 
 Tag Table:
 Node: Top71
 Node: Package mochi174
+Ref: #package-mochi307
 Node: Introduction to mochi458
+Ref: #introduction-to-mochi611
 Node: Definitions for mochi1085
+Ref: #definitions-for-mochi1272
 Node: Function mod_load path2165
+Ref: #function-mod_load-path2303
 Node: Function mod_print m3122
+Ref: #function-mod_print-m3302
 Node: Function mod_state_space m op_point3337
+Ref: #function-mod_state_space-m-op_point3562
 Node: Function mod_state_space m op_point override_params3563
+Ref: #function-mod_state_space-m-op_point-override_params3829
 Node: Function mod_state_space_symbolic m op_point5011
+Ref: #function-mod_state_space_symbolic-m-op_point5284
 Node: Function mod_simulate m op_point u_fn t_end [opts]5629
+Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5901
 Node: Function mod_step m op_point t_end [opts]6426
+Ref: #function-mod_step-m-op_point-t_end-opts6688
 Node: Function mod_impulse m op_point t_end [opts]6689
+Ref: #function-mod_impulse-m-op_point-t_end-opts6932
 Node: Function mod_cascade SS1 SS27466
+Ref: #function-mod_cascade-ss1-ss27679
 Node: Function mod_parallel SS1 SS27680
+Ref: #function-mod_parallel-ss1-ss27882
 Node: Function mod_unity_feedback SS K7883
+Ref: #function-mod_unity_feedback-ss-k8101
 Node: Function mod_transfer_function m op_point8742
+Ref: #function-mod_transfer_function-m-op_point8997
 Node: Function mod_transfer_function m op_point override_params8998
+Ref: #function-mod_transfer_function-m-op_point-override_params9260
 Node: Function mod_get m key9582
+Ref: #function-mod_get-m-key9792
 Node: Function mod__causalise m9862
+Ref: #function-mod__causalise-m10056
 Node: Function mod_dataflow m op_point [opts]11011
+Ref: #function-mod_dataflow-m-op_point-opts11229
 Node: Function mod_to_dot m op_point12190
+Ref: #function-mod_to_dot-m-op_point12419
 Node: Function mod_to_dot m op_point override_params12420
+Ref: #function-mod_to_dot-m-op_point-override_params12661
 Node: Function mod_to_mermaid m op_point12662
+Ref: #function-mod_to_mermaid-m-op_point12910
 Node: Function mod_to_mermaid m op_point override_params12911
+Ref: #function-mod_to_mermaid-m-op_point-override_params13168
 Node: Function mod_diagram m op_point [opts]13361
+Ref: #function-mod_diagram-m-op_point-opts13563
 Node: Subsystem mochi-nonlinear14879
+Ref: #subsystem-mochi-nonlinear15062
 Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]15723
+Ref: #function-mod_simulate_nonlinear-m-x0-u_fn-t_end-opts15958
 Node: Discrete events17315
+Ref: #discrete-events17436
 Node: Function mod_step_nonlinear m x0 t_end [opts]19571
+Ref: #function-mod_step_nonlinear-m-x0-t_end-opts19853
 Node: Function mod_impulse_nonlinear m x0 t_end [opts]19854
+Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts20076
 Node: Example20261
+Ref: #example20427
 Node: Note mod_load does not touch session state21309
+Ref: #note-mod_load-does-not-touch-session-state21521
 Node: Function and variable index21977
 
 End Tag Table
