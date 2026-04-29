@@ -14,34 +14,41 @@ These are the gaps I'd lose sleep over. Each one is a place where
 mochi appears to succeed but the result is wrong, with no clear
 signal to the user.
 
-### 1. State-dependent `If` in residuals breaks linearisation
+### 1. State-dependent `If` in residuals breaks linearisation — **fixed**
 
-A residual like `if x > 0 then a else b` — common in real models
+~~A residual like `if x > 0 then a else b` — common in real models
 with switched dynamics, dead zones, saturation, ideal diodes —
-survives mochi's `mod__simplify_expr` constant-folding pass because
-the condition `x > 0` depends on a state, not just parameters. It
-arrives at the Jacobian step still wrapped in `mcond`. Then
-`diff(mcond, x)` produces a piecewise expression that *might* be
-correct or *might* propagate weirdly through the operating-point
-substitution and `float(...)` calls.
+survives mochi's `mod__simplify_expr` constant-folding pass~~
 
-**Why it matters:** ideal diodes and saturation blocks are
-ubiquitous. A user with a Schmitt-trigger input or a comparator-
-based hysteresis controller could call `mod_state_space` and get
-garbage matrices without any warning.
+**Status: fixed.** `mod__resolve_cond_ifs` walks each expression
+after parameter substitution but before differentiation. For each
+`if-then-else` it finds, it substitutes the op-point INTO THE
+CONDITION ONLY and uses Maxima's `is(...)` to decide. If a condition
+resolves to true / false, the surviving branch is recursed into; the
+other is dropped. Branch bodies retain their state symbols so `diff`
+operates on a smooth single-branch expression.
 
-**What's likely to fix it:** detect at causalisation time whether a
-residual contains an `mcond` whose condition references a state. If
-so, either (a) error explicitly with "non-constant condition in
-residual `<expr>`; linearisation requires the condition to be a
-parameter or constant" so the user knows to fall back to nonlinear
-sim; or (b) substitute the operating point into *just the condition*
-before differentiating, so e.g. `if x > 0 then a else b` linearised
-at `x = 0.5` becomes `a` (since the condition is true at the op
-point) — which is what a textbook small-signal linearisation does
-anyway.
+The mathematical interpretation is exactly what a textbook small-
+signal linearisation does: pick the regime from the operating point,
+linearise within that regime. A user calling `mod_state_space(m, [x
+= 0.5, u = 0])` against a `der(x) = if x > 0 then (u - x)/T else (u
++ x)/T` model gets `A = -1/T` (the `x > 0` regime); calling with
+`[x = -0.5, u = 0]` gets `A = +1/T` (the unstable other side). For
+trajectories that cross the boundary at runtime, the right tool is
+`mod_simulate_nonlinear`, which keeps the `if` in the live RHS
+expression and re-evaluates at each integration step.
 
-Option (b) is the principled answer. Probably 30 lines of Maxima.
+See `examples/SwitchedRC.mo` and the regime-aware tests at the end
+of `rtest_mochi.mac` for the worked example.
+
+Caveat: this fix doesn't auto-detect `if`s in equations as discrete
+events the way Modelica's full semantics technically does. A bare
+`if x > 0 then a else b` (no enclosing `when`) is a continuous
+expression in mochi's nonlinear sim — CVODE's adaptive step size
+will work through it, but the integrator slows down and can lose
+accuracy near the boundary. The principled way to mark a switch as
+an event is to use `when (x > 0)` in the `.mo` file, which mochi-
+nonlinear's auto-extraction wires into CVODE's rootfinder.
 
 ### 2. `assert(...)` statements are silently dropped
 
@@ -276,13 +283,15 @@ then notebooks don't need to know their location. The dev story
 If you're doing one more round and want maximum impact:
 
 1. **CI test runner** (#12). Force-multiplier on everything else.
-2. **State-dependent `If` linearisation** (#1). Highest tier-1 risk.
+2. **Top-level `RealOutput` connector recognition** (#3). Most likely
+   tier-1 risk now that #1 is fixed.
 3. **`mod_print` shows algebraics** (#17). Trivial; helps everyone
    debug.
 
 If you're doing two rounds, also pick up:
 
-4. **Top-level `RealOutput` connector recognition** (#3) and **`assert(...)` carry-through** (#2). Gets us closer to "MSL just works,
+4. **`assert(...)` carry-through** (#2) and the rest of the discrete
+   machinery from MSL Blocks (#4). Gets us closer to "MSL just works,
    period".
 5. **Notebook output determinism** (#16). Removes review noise.
 

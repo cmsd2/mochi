@@ -46,6 +46,16 @@ e.g. `[iL = 0, vC = 0, Vin = 0]`.
 `override_params` is an optional list of equations like `[R = 2.0, L = 0.4]` that
 overrides the defaults from the `.mo` file.
 
+For plants with state-gated dynamics (`if x > 0 then a else b` in an
+equation block — saturation, dead zones, ideal diodes, sign-dependent
+currents), the linearisation is **regime-aware**: the operating point
+is used to pick which branch of each `if` is active, and the
+linearisation reflects only that regime. Re-call `mod_state_space`
+with a different operating point to get the linearisation of a
+different regime. For trajectories that cross a switching boundary at
+runtime, use `mod_simulate_nonlinear` from the `mochi-nonlinear`
+subsystem — it evaluates the `if` afresh at each integration step.
+
 ### Function: mod_state_space_symbolic (m, op_point)
 
 Same shape as `mod_state_space`, but returns Maxima matrices with **parameters

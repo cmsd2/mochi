@@ -279,12 +279,24 @@ operations matters and is the result of trial and error:
    cleanly (the symptom is "0 to a negative exponent" or "diff:
    variable must not be a number"). Forcing `ev(.., eval)` here
    collapses every parameter-gated branch.
-5. **Build Jacobians.** `genmatrix(lambda([i,j], diff(...)), n, n)`
+5. **`mod__resolve_cond_ifs`** — handles `if`s whose conditions
+   depend on *states*, not just parameters (so step 4 can't reduce
+   them). The walker substitutes the operating point into the
+   condition only, evaluates with `is(...)`, and picks the surviving
+   branch. The branch body retains its state symbols so `diff` still
+   has something to differentiate. This is what makes regime-aware
+   linearisation work — `der(x) = if x > 0 then a(x,u) else b(x,u)`
+   linearised at `x = 0.5` becomes `diff(a, x)` cleanly. See
+   `examples/SwitchedRC.mo`. Without this step Maxima's `diff`
+   refuses to push inside the `if` (it's piecewise, not classically
+   differentiable at the boundary), leaving an unevaluated `d/dx
+   (...)` that breaks downstream.
+6. **Build Jacobians.** `genmatrix(lambda([i,j], diff(...)), n, n)`
    for each of `A = ∂f/∂x`, `B = ∂f/∂u`, `C = ∂g/∂x`, `D = ∂g/∂u`.
    Now operates on a clean rational-function expression.
-6. **Substitute the operating point.** Op-point values for states
+7. **Substitute the operating point.** Op-point values for states
    and inputs go in here, last.
-7. **`float(...)`** to convert from Maxima rationals to double-
+8. **`float(...)`** to convert from Maxima rationals to double-
    precision floats so downstream numeric code (`np_eig`, `np_expm`,
    etc.) accepts them.
 
