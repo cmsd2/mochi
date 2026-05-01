@@ -79,9 +79,8 @@ print("D =")$ D;
 
 
 ```maxima
-dt : 0.05$ nt : 300$
-t_sim : makelist(i * dt, i, 0, nt - 1)$
-y_rlc : sim_step(A, B, C, dt, nt)$
+[t_sim, y_rlc] : mod_step(m_rlc, [iL = 0, vC = 0, Vin = 0], 14.95,
+                          ['dt = 0.05])$
 
 ax_draw2d(
   color="blue", line_width=2, name="vC(t)",
@@ -130,7 +129,11 @@ A different physical motor with $R=2, L=0.4, C=0.5$:
                                           [iL = 0, vC = 0, Vin = 0],
                                           [R = 2, L = 0.4, Ccap = 0.5])$
 print("A =")$ A2;
-y_rlc2 : sim_step(A2, B2, C2, dt, nt)$
+
+[_, y_rlc2] : mod_step(m_rlc, [iL = 0, vC = 0, Vin = 0], 14.95,
+                       ['dt = 0.05,
+                        'params = [R = 2, L = 0.4, Ccap = 0.5]])$
+
 ax_draw2d(
   color="blue", line_width=2, name="default params",
   lines(t_sim, y_rlc),
@@ -199,9 +202,8 @@ The DC motor has one fast pole (electrical, $\sim -100$ rad/s) and one slow pole
 
 
 ```maxima
-dt_m : 0.001$ nt_m : 5000$
-t_sim_m : makelist(i * dt_m, i, 0, nt_m - 1)$
-y_motor : sim_step(Am, Bm, Cm, dt_m, nt_m)$
+[t_sim_m, y_motor] : mod_step(m_motor, [ia = 0, omega = 0, va = 0], 4.999,
+                                 ['dt = 0.001])$
 
 ax_draw2d(
   color="blue", line_width=2, name="ω(t)",
@@ -278,9 +280,8 @@ print("Double-tank A =")$ At;
 
 
 ```maxima
-dt_t : 0.1$ nt_t : 300$
-t_sim_t : makelist(i * dt_t, i, 0, nt_t - 1)$
-y_tank : sim_step(At, Bt, Ct, dt_t, nt_t)$
+[t_sim_t, y_tank] : mod_step(m_tank, [h1 = 0, h2 = 0, q_in = 0], 29.9,
+                                ['dt = 0.1])$
 
 ax_draw2d(
   color="blue", line_width=2, name="h₂(t)",
