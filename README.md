@@ -1,5 +1,7 @@
 # mochi
 
+[![Docs](https://img.shields.io/badge/docs-online-blue)](https://cmsd2.github.io/mochi/)
+
 Read Modelica models into Maxima symbolic equations.
 
 `mochi` is a thin Maxima frontend over [rumoca](https://github.com/CogniPilot/rumoca), a Rust-based Modelica compiler. (The name puns on the `.mo` file extension; the package itself is unaffiliated with the Modelica Association.) `rumoca` does the heavy lifting (parse, flatten, classify variables, emit a JSON DAE); a small Common Lisp loader (`mochi-loader.lisp`) walks the AST and constructs Maxima symbols directly; this package wraps the result in a struct and provides operations on top: pretty-printing, state-space linearisation around an operating point, linear time-domain simulation, transfer functions, plant composition, dataflow diagram rendering. The opt-in `mochi-nonlinear` subsystem adds direct integration of the original nonlinear DAE via SUNDIALS CVODE.
