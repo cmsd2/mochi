@@ -3,6 +3,7 @@
  * Provides:
  *   mod_simulate_nonlinear — integrate the nonlinear DAE via SUNDIALS CVODE
  *   mod_step_nonlinear, mod_impulse_nonlinear — convenience wrappers
+ *   mod_advance — one-step state advance, RL-shaped (next-state only)
  *
  * Requires mochi (mod_load) AND numerics-sundials (np_cvode) loaded first:
  *
@@ -169,11 +170,12 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   ni : length(inputs),
   no : length(outputs),
 
-  /* Symbolic causalisation, then substitute parameters once. */
+  /* Symbolic causalisation, then substitute parameters.  Use the same
+     fixed-point resolver as mod_state_space so chained parameters
+     (e.g. `parameter Real i_bias = sqrt(m*g*x_ref^2/km)') reduce to
+     numbers rather than leaving CVODE with a symbolic RHS. */
   [der_eqs, alg_eqs, output_eqs] : mod__causalise(m),
-  param_subst : map(lambda([p], p[1] = p[2]), mod_get(m, 'params)),
-  if length(params) > 0 then
-    param_subst : append(params, param_subst),
+  param_subst : mod__resolve_params(mod_get(m, 'params), params),
   der_exprs    : map(lambda([e], subst(param_subst, e[2])), der_eqs),
   output_exprs : map(lambda([e], subst(param_subst, e[2])), output_eqs),
   /* Bake parameters into event expressions and guards (so np_cvode's
@@ -195,6 +197,11 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   if not listp(u_exprs) or length(u_exprs) # ni then
     error("mod_simulate_nonlinear: u_fn(t) must return a list of length ",
           ni, " (one per input), got ", u_exprs),
+  /* Substitute model parameters into u_exprs too — closed-loop policies
+     written in terms of the model's symbolic parameters (e.g.
+     `lambda([t], [x_ref + k*x])') need x_ref / k resolved before the
+     RHS goes to CVODE.  Cheap: u_exprs is one entry per input. */
+  u_exprs : map(lambda([e], subst(param_subst, e)), u_exprs),
   input_subst : makelist(inputs[i] = u_exprs[i], i, 1, ni),
   rhs_exprs   : map(lambda([e], subst(input_subst, e)), der_exprs),
   vars_list   : append(['t], states),
@@ -368,3 +375,46 @@ mod_impulse_nonlinear(m, x0, t_end, [opts]) := block(
                                        else 0.0,
                                      i, 1, ni_v))),
   mod_simulate_nonlinear(m, x0, u_fn, t_end, opts1))$
+
+/* mod_advance(m, x, u_value, dt, [opts]) → next_state
+ *
+ * Advance the model `m' from continuous state `x' (a list of state
+ * values, in mod_get(m, 'states) order) by exactly `dt' seconds with
+ * the input held constant at `u_value' (scalar for a SISO plant, list
+ * for multi-input).  Returns the final state as a list.
+ *
+ * Bridge for numerics-learn's RL APIs: `np_qlearn' and `np_rollout'
+ * want a step_fn(state, action) returning [next_state, reward, done].
+ * mod_advance is the continuous-state advance step; the user wraps it
+ * with their own discretisation, reward, and termination logic:
+ *
+ *   step_fn(s, a) := block(
+ *     [x : decode_state(s),
+ *      u : decode_action(a),
+ *      x_next : mod_advance(m, x, u, dt),
+ *      s_next : encode_state(x_next),
+ *      reward : -((x_next[1] - target)^2),
+ *      done   : is(abs(x_next[1] - target) < tol)],
+ *     [s_next, reward, done])$
+ *
+ * For `np_cem' (parametric policy search) you don't need
+ * mod_advance — call mod_simulate_nonlinear directly with a u_fn
+ * that returns symbolic expressions in the state symbols.  Model
+ * parameters (e.g. `x_ref') in the policy are resolved by the
+ * param_subst pass inside mod_simulate_nonlinear.
+ *
+ * `'return = 'states' and `'dt = dt' are forced; user opts (params,
+ * rtol, atol, method, events, ...) come second and supplement these.
+ * For event-driven plants the auto-extracted events still apply, so
+ * a single mod_advance step can fire and apply resets if a `when'
+ * detector crosses zero during dt.
+ */
+mod_advance(m, x, u_value, dt, [opts]) := block(
+  [opts1, u_list, u_fn, sim_opts, _, x_traj],
+  if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
+  u_list : if listp(u_value) then u_value else [u_value],
+  u_fn : buildq([uv : u_list], lambda([t], uv)),
+  sim_opts : append(['return = 'states, 'dt = dt], opts1),
+  [_, x_traj] : mod_simulate_nonlinear(m, x, u_fn, dt, sim_opts),
+  /* x_traj has two entries: x at t=0, x at t=dt. */
+  last(x_traj))$

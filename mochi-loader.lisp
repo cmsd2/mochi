@@ -351,6 +351,10 @@ cl-json wraps Pascal-case tags in `*' to preserve case."
       (:*mul (list '(mtimes) lhs rhs))
       (:*div (list '(mtimes) lhs (list '(mexpt) rhs -1)))
       (:*pow (list '(mexpt) lhs rhs))
+      (:*exp (list '(mexpt) lhs rhs))   ; rumoca tag for `^' in Modelica source.
+                                        ; (Modelica's `^' is exponentiation; this
+                                        ; isn't related to Maxima's `exp(...)' or
+                                        ; matrix-exponential operators.)
       (:*eq  (list '(mequal) lhs rhs))
       ;; Comparison operators that show up inside If branches in
       ;; MSL blocks (e.g. pid.D.zeroGain = (Td < 1e-12)).
