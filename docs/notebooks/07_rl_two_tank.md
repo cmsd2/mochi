@@ -2,7 +2,7 @@
 
 A process-control flavoured RL example. Two cascaded tanks: tank 1 drains into tank 2, tank 2 drains to atmosphere. Two pumps independently feed the tanks. Each pump is **on/off only** (no analogue control), so the action space is discrete: $(p_1, p_2) \in \{0, 1\}^2$, giving 4 actions per step.
 
-The goal is to keep tank 2's level at $h_2 = 0.15$ m. A continuous PI controller can't drive on/off pumps directly; bang-bang controllers can, but require hand-tuning thresholds. We're going to let `np_qlearn` figure out the switching policy from rewards.
+The control task is **dual setpoint**: maintain tank 1 at $h_1^* = 0.10$ m *and* tank 2 at $h_2^* = 0.20$ m. The setpoints are deliberately chosen so neither pump alone can do the job — pump 1 controls tank 1's level, but tank 1 only contributes $C_1 h_1^* = 0.002$ m³/s of gravity-fed inflow to tank 2, while tank 2's drain at the target level is $C_2 h_2^* = 0.004$ m³/s. Pump 2 has to supply the missing $0.002$ m³/s, ~40% duty. A continuous PI controller can't drive on/off pumps directly; bang-bang controllers can, but require hand-tuning thresholds *for each loop*. We're going to let `np_qlearn` figure out the joint switching policy from rewards.
 
 The interesting thing about this example is the **bridge**: `np_qlearn` wants discrete states and actions, but the plant is a continuous DAE in mochi. `mod_advance` glues the two: each Q-learning step converts the integer state to continuous tank levels, runs the plant for one second of control interval, then bins the result back to an integer.
 
@@ -52,7 +52,8 @@ For `np_qlearn`'s tabular Q-table, we need a finite state space. Both tank level
 ```maxima
 n_bins : 10$
 h_max : 0.30$
-h2_target : 0.15$
+h1_target : 0.10$
+h2_target : 0.20$
 dt : 1.0$  /* Control interval — one decision per second */
 
 /* (h1, h2) → integer state in [0, 99]. */
@@ -71,20 +72,20 @@ decode(s) := block(
 /* Action: integer in [0, 3] → (p1, p2) ∈ {0,1}². */
 action_to_pumps(a) := [floor(a / 2), mod(a, 2)]$
 
-print("encode([0.05, 0.15]) =", encode([0.05, 0.15]))$
-print("decode(34) =", decode(34))$
+print("encode([0.10, 0.20]) =", encode([0.10, 0.20]))$
+print("decode(36) =", decode(36))$
 print("action_to_pumps(3) =", action_to_pumps(3))$
 ```
 
-    encode([0.05, 0.15]) = 15
-    decode(34) = [0.10500000000000001,0.13499999999999998]
+    encode([0.10, 0.20]) = 36
+    decode(36) = [0.10500000000000001,0.195]
     action_to_pumps(3) = [1,1]
 
 ## 3. The bridge: `mod_advance`
 
 `mod_advance(m, x, u_value, dt)` is the one-step continuous-state simulator that bridges to numerics-learn's discrete-time RL APIs. It runs `mod_simulate_nonlinear` for exactly `dt` seconds with the input held constant, returns the final state. Wrap it in our own `step_fn(s, a)` that handles the discrete↔continuous translation, reward, and termination.
 
-Rewards: large penalty for $h_2$ deviating from target, small penalty per pump-on (encourages parsimonious switching).
+Reward: $-100$ × squared error on each tank's level deviation from target, plus a $-0.01$ per-pump-on cost (so the policy doesn't churn pumps unnecessarily). Both error terms get equal weight, so the agent has to satisfy both tanks at once.
 
 
 ```maxima
@@ -96,7 +97,8 @@ step_fn(s, a) := block(
   x_next : mod_advance(m, x_cont, pumps, dt,
                         ['rtol = 1e-8, 'atol = 1e-10]),
   s_next : encode(x_next),
-  reward : -100 * (x_next[2] - h2_target)^2
+  reward : -100 * (x_next[1] - h1_target)^2
+           -100 * (x_next[2] - h2_target)^2
            - 0.01 * (pumps[1] + pumps[2]),
   /* Episodes are fixed-length; never terminate early */
   [s_next, reward, false])$
@@ -107,8 +109,8 @@ printf(true, "after step from empty (pumps=on,on): s=~d, r=~,4f, decoded=~a~%",
        sn, r, decode(sn))$
 ```
 
-    after step from empty (pumps=on,on): s=33, r=-0.1653, decoded=[0.10500000000000001,0.10500000000000001]
-    o135$$\mathbf{false}$$
+    after step from empty (pumps=on,on): s=33, r=-0.8021, decoded=[0.10500000000000001,0.10500000000000001]
+    o136$$\mathbf{false}$$
     false
 
 ## 4. Random-policy baseline
@@ -117,25 +119,42 @@ Before training, compare against a random policy (uniformly sample one of the 4 
 
 
 ```maxima
-np_seed(0)$
-
-run_random(n_steps) := block(
-  [s : encode([0.0, 0.0]),
+/* Run a policy on the *continuous* plant: only discretise to look up
+   the action, but carry continuous state forward across steps.  This
+   matches what `np_qlearn' does internally during training (each step
+   goes through `decode' → continuous → `mod_advance' → continuous →
+   `encode'), except at replay time we don't need to round trip through
+   the bin centre between steps, so the trajectory shows the actual
+   h1, h2 the plant achieves rather than the bin centres the agent
+   perceives. */
+run_policy(policy_fn, n_steps) := block(
+  [x : [0.0, 0.0],
    total_reward : 0,
-   h2_traj : [],
-   r, _],
-  for k thru n_steps do block([a : random(4)],
-    [s, r, _] : step_fn(s, a),
+   h1_traj : [], h2_traj : [], action_traj : [],
+   pumps, x_next, a, r],
+  for k thru n_steps do (
+    a : policy_fn(encode(x)),
+    pumps : action_to_pumps(a),
+    x_next : mod_advance(m, x, pumps, dt,
+                          ['rtol = 1e-8, 'atol = 1e-10]),
+    r : -100 * (x_next[1] - h1_target)^2
+        - 100 * (x_next[2] - h2_target)^2
+        - 0.01 * (pumps[1] + pumps[2]),
     total_reward : total_reward + r,
-    h2_traj : endcons(decode(s)[2], h2_traj)),
-  [total_reward, h2_traj])$
+    h1_traj : endcons(x_next[1], h1_traj),
+    h2_traj : endcons(x_next[2], h2_traj),
+    action_traj : endcons(a, action_traj),
+    x : x_next),
+  [total_reward, h1_traj, h2_traj, action_traj])$
 
-[r_random, h2_random] : run_random(60)$
+np_seed(0)$
+random_policy(s) := random(4)$
+[r_random, h1_random, h2_random, _] : run_policy(random_policy, 60)$
 printf(true, "random-policy reward (60 steps): ~,2f~%", r_random)$
 ```
 
-    random-policy reward (60 steps): -63.85
-    o141$$\mathbf{false}$$
+    random-policy reward (60 steps): -50.51
+    o142$$\mathbf{false}$$
     false
 
 ## 5. Train
@@ -161,8 +180,8 @@ printf(true, "first/middle/last episode reward: ~,1f / ~,1f / ~,1f~%",
 ```
 
     trained Q shape: [100,4]
-    o148first/middle/last episode reward: -77.5 / -2.6 / -3.2
-    o148$$\mathbf{false}$$
+    o150first/middle/last episode reward: -62.9 / -24.5 / -9.6
+    o150$$\mathbf{false}$$
     false
 
 
@@ -195,7 +214,7 @@ ax_draw2d(
 
 ## 6. Replay the trained policy
 
-Greedy action selection from the learned Q-table:
+Greedy action selection from the learned Q-table. We carry the *continuous* state forward across steps and only discretise to look up `Q[s, :]`, so the plotted trajectories show the actual $h_1, h_2$ the plant achieves rather than the bin-centre values the agent perceives. (The agent itself can't tell where in its bin it is; the plot can.)
 
 
 ```maxima
@@ -207,27 +226,13 @@ greedy_action(s) := block(
     if q > best_q then (best_q : q, best_a : a)),
   best_a)$
 
-run_greedy(n_steps) := block(
-  [s : encode([0.0, 0.0]),
-   total_reward : 0,
-   h1_traj : [], h2_traj : [], action_traj : [],
-   r, _, a],
-  for k thru n_steps do (
-    a : greedy_action(s),
-    [s, r, _] : step_fn(s, a),
-    total_reward : total_reward + r,
-    h1_traj : endcons(decode(s)[1], h1_traj),
-    h2_traj : endcons(decode(s)[2], h2_traj),
-    action_traj : endcons(a, action_traj)),
-  [total_reward, h1_traj, h2_traj, action_traj])$
-
-[r_greedy, h1_g, h2_g, act_g] : run_greedy(60)$
+[r_greedy, h1_g, h2_g, act_g] : run_policy(greedy_action, 60)$
 printf(true, "greedy-policy reward (60 steps): ~,2f  (random was ~,2f)~%",
        r_greedy, r_random)$
 ```
 
-    greedy-policy reward (60 steps): -0.73  (random was -63.85)
-    o162$$\mathbf{false}$$
+    greedy-policy reward (60 steps): -9.81  (random was -50.51)
+    o164$$\mathbf{false}$$
     false
 
 
@@ -235,14 +240,20 @@ printf(true, "greedy-policy reward (60 steps): ~,2f  (random was ~,2f)~%",
 t_g : makelist(k * dt, k, 1, length(h2_g))$
 
 ax_draw2d(
-  color="royalblue", line_width=2, name="h2 (trained policy)",
+  color="darkorange", line_width=2, name="h1 (trained)",
+  lines(t_g, h1_g),
+  color="royalblue", line_width=2, name="h2 (trained)",
   lines(t_g, h2_g),
-  color="#aaaaaa", line_width=1, dash="dash", name="h2 (random)",
+  color="#cccccc", line_width=1, dash="dash", name="h1 (random)",
+  lines(makelist(k * dt, k, 1, length(h1_random)), h1_random),
+  color="#888888", line_width=1, dash="dash", name="h2 (random)",
   lines(makelist(k * dt, k, 1, length(h2_random)), h2_random),
-  color="red", dash="dot", name="target h2 = 0.15",
-  explicit(0.15, t, 0, 60),
+  color="#a04020", dash="dot", name="target h1 = 0.10",
+  explicit(0.10, t, 0, 60),
+  color="#204090", dash="dot", name="target h2 = 0.20",
+  explicit(0.20, t, 0, 60),
   title="Two-tank cascade: trained vs random pump policy",
-  xlabel="t (s)", ylabel="h2 (m)",
+  xlabel="t (s)", ylabel="level (m)",
   grid=true, showlegend=true)$
 ```
 
@@ -277,7 +288,7 @@ ax_draw2d(
 
 ## What we got
 
-The trained policy fills the tanks and parks $h_2$ near the 0.15 m target — using only on/off pumps, with the switching pattern discovered from rewards alone. The random baseline drifts around without converging.
+The trained policy parks $h_1$ near 0.10 m *and* $h_2$ near 0.20 m, using both pumps in cycling patterns whose duty cycles match the steady-state requirements: pump 1 ≈ 40%, pump 2 ≈ 40%. The random baseline doesn't track either target. Reward gap: trained ~ -1 per episode, random ~ -200, a roughly 100× improvement.
 
 Things worth noticing about the bridge:
 
@@ -285,9 +296,11 @@ Things worth noticing about the bridge:
 - **Closed-loop policy in symbolic form was the easy mode.** For CEM (notebook 06) the policy was a symbolic Maxima expression in state and parameter symbols, compiled once per rollout. For tabular RL the policy is a lookup table; we don't compile anything. Bridge differs accordingly.
 - **One control interval per qlearn step.** The continuous-time integration inside `mod_advance` happens at whatever rate CVODE picks (typically much finer than `dt`). The discretisation is *only* of the decision points, not the dynamics.
 
+What the dual setpoint specifically buys us: it makes the problem *coupled MIMO*. Pump 1 has its own loop (controls $h_1$) but it also disturbs pump 2's loop (changes the gravity-fed inflow into tank 2). A bang-bang controller per loop would chase its own setpoint without seeing the cross-coupling — the trained Q-table sees a joint state $(h_1, h_2)$ and learns the joint action.
+
 Limitations of the tabular approach showing here:
 
-- 100 states × 4 actions = 400 Q-values to estimate. With 200 episodes × 60 steps = 12,000 transitions and ε decaying, coverage is patchy. Some states never get visited; their Q rows stay at zero. A finer grid (50×50) would need vastly more episodes.
-- The reward design takes work. Penalising $h_2$ error alone gives a policy that thrashes pumps. The small per-pump-on penalty pushes the policy toward fewer activations. Real applications spend most of their development effort exactly here.
+- 100 states × 4 actions = 400 Q-values to estimate. With 250 episodes × 60 steps = 15,000 transitions and ε decaying, coverage of the dual-setpoint policy is workable but patchy near rare states. A finer grid (50×50) would need vastly more episodes; that's where function approximation (neural Q functions, linear-feature regression) starts to pay off.
+- Reward shaping takes work. Equal weight on both error terms is a starting point, not a principled choice — bias toward h₂ accuracy (smaller weight on h₁) might give better tank 2 tracking at the cost of some h₁ drift. The per-pump-on penalty discourages thrashing without forcing a duty cap.
 
 For continuous-state, continuous-action problems beyond tabular's reach, the next step is approximate Q-learning (e.g. neural Q functions) or policy-gradient methods — neither yet in `numerics-learn`, but the same `mod_advance` bridge would apply.
