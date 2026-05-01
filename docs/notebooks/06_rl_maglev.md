@@ -2,12 +2,13 @@
 
 A steel ball is suspended below an electromagnet by an attractive force $\propto i^2 / x^2$, fighting gravity. Open-loop the system is *unstable*: drop the current and the ball falls; raise it slightly and the ball slams into the magnet. A controller has to keep the ball at a target distance below the magnet using only position feedback.
 
-This notebook does the same control problem **two ways** against the same Modelica plant:
+This notebook does the same control problem **three ways** against the same Modelica plant:
 
-1. **Linear**: linearise around the equilibrium with `mod_state_space`, hand-pick PD gains by pole placement.
-2. **Reinforcement learning**: black-box optimise the same PD gains with `np_cem` (cross-entropy method) directly against the *nonlinear* plant — no linearisation, no operating-point assumption.
+1. **Pole placement**: linearise around the equilibrium with `mod_state_space`, choose where the closed-loop poles should go, solve for the gains.
+2. **LQR**: linearise, supply quadratic state and input penalty matrices, get the optimal gains in one shot via `mod_lqr`.
+3. **Reinforcement learning**: black-box optimise the same PD gains with `np_cem` (cross-entropy method) directly against the *nonlinear* plant — no linearisation, no operating-point assumption.
 
-The interesting comparison is what each method gets you. Pole placement gives you analytical insight (closed-form gain ↔ closed-loop pole locations) but works only near the operating point. CEM gives you a controller tuned for the actual nonlinear dynamics, including the inverse-square magnetic-force term.
+The interesting comparison is what each method gets you. Pole placement and LQR both work on the linearised plant but ask different questions of the engineer; CEM treats the simulator as a black box and tunes against actual nonlinear dynamics, including the inverse-square magnetic-force term.
 
 
 ```maxima
@@ -142,7 +143,66 @@ ax_draw2d(
     
 
 
-## 4. Same controller form, gains learned by CEM
+## 4. Same plant, optimal control via LQR
+
+Pole placement asks the engineer to pick *where* the closed-loop poles should go. LQR asks a different question: *what does it cost me when the state deviates and when I use control?* We supply two penalty matrices — $Q$ on the state and $R$ on the input — and `mod_lqr` returns the gain that minimises
+
+$$J = \int_0^\infty \big( \tilde x^\top Q\, \tilde x + \tilde u^\top R\, \tilde u \big) \, dt$$
+
+over the linearised plant ($\tilde x = x - x_{\text{ref}}$, $\tilde u = i - i_{\text{bias}}$). Internally `mod_lqr` calls `mod_state_space` to get $A, B$ and then `np_lqr` to solve the algebraic Riccati equation.
+
+With $Q = I$, $R = [1]$ — the "no special preference" choice — LQR returns gains that produce two real, distinct closed-loop poles. Slower than the pole-placed pair, but no overshoot. The $Q/R$ ratio is the knob: larger $Q$ pushes harder for state error and gets faster, more aggressive control; larger $R$ does the opposite.
+
+
+```maxima
+K_lqr_mat : mod_lqr(m, [x = 0.008, v = 0, coil_i = 0.28],
+                     matrix([1.0, 0.0], [0.0, 1.0]),
+                     matrix([1.0]))$
+print("LQR gain K =", K_lqr_mat)$
+
+/* mod_lqr returns K such that u_tilde = -K * x_tilde, so to wire it
+   into the same `u = i_bias + k1*(x - x_ref) + k2*v` policy form
+   used above we negate the matrix elements. */
+k1_lqr : -K_lqr_mat[1,1]$
+k2_lqr : -K_lqr_mat[1,2]$
+printf(true, "effective k1 = ~,2f, k2 = ~,2f~%", k1_lqr, k2_lqr)$
+
+/* Closed-loop eigenvalues for sanity. */
+[evals_lqr, _] : np_eig(ndarray(float(matrix([0, 1],
+                                              [2452 - 70*k1_lqr,
+                                               -70*k2_lqr]))))$
+print("closed-loop eigenvalues:", np_to_list(evals_lqr))$
+
+u_lqr : buildq([k1v : k1_lqr, k2v : k2_lqr],
+                lambda([t], [i_bias + k1v * (x - x_ref) + k2v * v]))$
+
+[t_lqr, x_lqr] : mod_simulate_nonlinear(
+    m, [0.011, 0.0], u_lqr, 0.5,
+    ['return = 'states, 'dt = 0.001])$
+
+ax_draw2d(
+  color="seagreen", line_width=2, name="PD (LQR, Q=I, R=1)",
+  lines(t_lqr, map(first, x_lqr)),
+  color="black", dash="dot",
+  explicit(0.008, t, 0, 0.5),
+  title="MagLev with LQR-tuned PD gains",
+  xlabel="t (s)", ylabel="x (m)",
+  yrange=[0.005, 0.013],
+  grid=true, showlegend=true)$
+```
+
+    LQR gain K = matrix([-70.01428280002321,-1.7321686061121955])
+    effective k1 = 70.01, k2 = 1.73
+    o148
+    closed-loop eigenvalues: [-25.60447774201195,-95.64732468584175]
+
+
+    
+![svg](06_rl_maglev_files/06_rl_maglev_11_1.svg)
+    
+
+
+## 5. Same controller form, gains learned by CEM
 
 Now we let the cross-entropy method tune the same two gains by black-box rollout. Each generation, `np_cem` samples 30 candidate $(k_1, k_2)$ pairs from a Gaussian, runs each through `mod_simulate_nonlinear` for half a second, scores the trajectory by mean squared position error plus a small velocity penalty, keeps the best 8, and refits the Gaussian to the survivors.
 
@@ -274,8 +334,8 @@ printf(true, "final cost: ~,3e~%", last(np_to_list(hist)))$
     [WARNING][rank 0][/private/tmp/sundials-20260406-7535-hqs0wm/sundials-7.7.0/src/cvode/cvode.c:1516][CVode] Internal t = 0.188632746499813 and h = 1.35015933319164e-17 are such that t + h = t on the next step. The solver will continue anyway.
     [WARNING][rank 0][/private/tmp/sundials-20260406-7535-hqs0wm/sundials-7.7.0/src/cvode/cvode.c:1516][CVode] Internal t = 0.188632746499813 and h = 1.35015933319164e-17 are such that t + h = t on the next step. The solver will continue anyway.
     [WARNING][rank 0][/private/tmp/sundials-20260406-7535-hqs0wm/sundials-7.7.best gains: k1 = 98.36, k2 = 0.94
-    o153final cost: 3.591e-7
-    o153$$\mathbf{false}$$
+    o166final cost: 3.591e-7
+    o166$$\mathbf{false}$$
     false
 
 Plot the cost-vs-generation curve to confirm the CEM actually converged:
@@ -294,11 +354,11 @@ ax_draw2d(
 
 
     
-![svg](06_rl_maglev_files/06_rl_maglev_14_0.svg)
+![svg](06_rl_maglev_files/06_rl_maglev_16_0.svg)
     
 
 
-## 5. Head-to-head
+## 6. Head-to-head
 
 Simulate both controllers from the same initial perturbation and overlay:
 
@@ -314,11 +374,13 @@ u_cem : buildq([k1v : k1_cem, k2v : k2_cem],
 ax_draw2d(
   color="blue", line_width=2, name="PD (pole placement)",
   lines(t_pd, map(first, x_pd)),
+  color="seagreen", line_width=2, name="PD (LQR, Q=I, R=1)",
+  lines(t_lqr, map(first, x_lqr)),
   color="red", line_width=2, name="PD (CEM-tuned)",
   lines(t_cem, map(first, x_cem)),
   color="black", dash="dot",
   explicit(0.008, t, 0, 0.5),
-  title="MagLev: hand-tuned vs CEM-tuned (same plant, same form)",
+  title="MagLev: pole placement vs LQR vs CEM (same plant, same form)",
   xlabel="t (s)", ylabel="x (m)",
   yrange=[0.005, 0.013],
   grid=true, showlegend=true)$
@@ -326,18 +388,24 @@ ax_draw2d(
 
 
     
-![svg](06_rl_maglev_files/06_rl_maglev_16_0.svg)
+![svg](06_rl_maglev_files/06_rl_maglev_18_0.svg)
     
 
 
 ## What we got
 
-Both controllers stabilise the ball at the 8 mm setpoint. CEM has *more* overshoot than the pole-placed PD, which is worth understanding: CEM minimised mean squared position error (plus a tiny velocity penalty) over the 0.5 s rollout. Mean squared error is dominated by *how fast* you reach the setpoint, so the optimum trades a sharper rise against a more-underdamped response — the resulting closed-loop poles sit near $-33 \pm 58i$ (damping ratio $\zeta \approx 0.49$), more aggressive than the $-50 \pm 50i$ ($\zeta = 0.707$) pole-placed pair. CEM did exactly what the cost asked for. To get pole-placement-like critical damping out of CEM, the cost would need an explicit overshoot term — e.g. an asymmetric one-sided squared penalty heavily weighted, or a peak-error term such as $\max_t (x_{\text{ref}} - x)^2$.
+Three controllers, same plant, same form ($u = i_{\text{bias}} + k_1(x - x_{\text{ref}}) + k_2 v$), three different ways to pick $(k_1, k_2)$:
 
-Where CEM matters more than this notebook shows:
+- **Pole placement** specifies *where* the closed-loop poles should go. Snappy underdamped pair at $-50 \pm 50i$ ($\zeta = 0.707$); modest overshoot, ~80 ms settling.
+- **LQR** with $Q = I$, $R = [1]$ specifies a *cost*. The math returns a critically-overdamped real-pole pair (around $-26$ and $-95$). Slowest to settle, but no overshoot.
+- **CEM** doesn't specify either pole locations or the cost analytically — it just runs rollouts and minimises mean squared position error. Ends up the most aggressive of the three (poles near $-33 \pm 58i$, $\zeta \approx 0.49$), with the most overshoot. CEM did exactly what the cost asked for: mean-squared-error is dominated by how fast you reach the setpoint, so the optimum trades a sharper rise against more underdamping.
 
-- **Wider operating envelope.** Pole placement is correct only near $(x_{\text{ref}}, 0)$; the inverse-square nonlinearity makes those gains aggressive at small $x$ and soggy at large $x$. CEM training over a *distribution* of initial conditions (instead of just one IC at 11 mm) finds gains that span the range.
-- **Cost shapes that aren't analytical.** Add a control-effort penalty, a current-rate-of-change penalty, or a saturation clip — pole placement no longer applies; CEM doesn't care.
-- **No model.** CEM treats `mod_simulate_nonlinear` as a black box. If `m` were a CFD simulator or a hardware-in-the-loop rig with the same `[t_list, y_list]` interface, the same code would work.
+The three are stops along a spectrum: explicit pole control on one end, optimisation against a cost on the other, and a quadratic-cost analytical bridge in the middle. For SISO they all give similar quality answers; the interesting differences emerge in MIMO and nonlinear settings.
 
-The limitation: CEM scales poorly past 10–20 parameters. For richer controllers (neural networks, parameterised feedback laws) you'd reach for `np_qlearn` (next notebook) or a policy-gradient method (not yet in numerics-learn).
+Where each method really matters:
+
+- **LQR** scales naturally to MIMO. With three inputs and six states (e.g. quadrotor attitude), LQR gives you an $A_{cl}$ guaranteed Hurwitz with provably optimal cost, while pole placement on MIMO is overdetermined.
+- **CEM** handles arbitrary cost shapes. Add a control-effort penalty, a current-rate-of-change penalty, or a saturation clip — neither pole placement nor LQR's quadratic-cost assumption applies; CEM doesn't care. CEM also scales to *training over a distribution of initial conditions*, which finds gains that span an envelope rather than just an op-point.
+- **Pole placement** scales least well, but is irreplaceable when you want to specify exact pole locations (e.g. matching a hardware oscillation frequency, or matching another reference design).
+
+Limitation common to all three: they design against the *linearised* plant. The MagLev's inverse-square nonlinearity makes gains tuned at $x = 8\,\text{mm}$ aggressive at smaller $x$ and soggy at larger $x$. CEM is the one that can be retrained against the actual nonlinear plant for a wider operating envelope. For richer controllers (neural networks, parameterised feedback laws over more than ~20 parameters) you'd reach for `np_qlearn` (next notebook) or a policy-gradient method (not yet in numerics-learn).
