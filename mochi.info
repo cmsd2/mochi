@@ -416,7 +416,9 @@ Three modes for the ‘'events’ opt:
    • *‘[]’* -- disable event handling (pure continuous integration, even
      if the model has ‘when’ clauses).
    • *explicit list* -- override the auto-extraction.  Each entry is
-     ‘[detector, reset_eqs]’ or ‘[detector, reset_eqs, guard]’:
+     ‘[detector, reset_eqs]’, ‘[detector, reset_eqs, guard]’, or the
+     full 5-element ‘[detector, reset_eqs, guard, cond_pretty,
+     direction]’ form (auto-extracted events use the latter):
         • ‘detector’ -- a Maxima expression in the state symbols.  Its
           zero crossings (detected by SUNDIALS' rootfinder) trigger the
           event.
@@ -426,15 +428,23 @@ Three modes for the ‘'events’ opt:
           time; the reset is applied only if ‘guard > 0’.  Used to
           translate compound ‘when’ conditions (‘h <= 0 AND v < 0’)
           faithfully.  Defaults to ‘true’.
+        • ‘cond_pretty’ -- original boolean for ‘mod_print’; ignored by
+          the simulator.
+        • ‘direction’ (optional) -- ‘-1’, ‘0’, or ‘+1’, restricting
+          CVODE's rootfinder to the matching crossing direction.
+          Defaults to ‘0’ (any crossing).  Auto-extracted events fill
+          this in from the original inequality so the post-reset state
+          doesn't immediately re-fire.
 
 The integrator runs segment-by-segment between requested sample times.
-When CVODE reports a zero-crossing, the loop evaluates the guard at the
-event-time state -- if positive, applies the reset and restarts from a
-tiny Euler half-step past the event (so CVODE doesn't immediately
-re-detect the boundary).  If the guard is non-positive, the detection is
-treated as spurious and integration continues without a reset.  A
-watchdog (100 events per segment, 1 ms dedup window) breaks Zeno-like
-loops.
+When CVODE reports a zero-crossing in the configured direction, the loop
+evaluates the guard at the event-time state -- if positive, applies the
+reset and resumes from the post-reset state at exactly the event time.
+If the guard is non-positive, the detection is treated as spurious and
+integration continues without a reset.  For legacy 2-/3-element user
+events with no ‘direction’, the loop also takes a tiny Euler half-step
+past the boundary (the pre-‘rootdir’ fallback).  A 100-event-per-segment
+watchdog breaks Zeno-like loops.
 
 See ‘examples/BouncingBall.mo’ and the ‘04_events’ notebook for a
 complete worked example.
@@ -615,15 +625,15 @@ Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]15723
 Ref: #function-mod_simulate_nonlinear-m-x0-u_fn-t_end-opts15958
 Node: Discrete events17315
 Ref: #discrete-events17436
-Node: Function mod_step_nonlinear m x0 t_end [opts]19571
-Ref: #function-mod_step_nonlinear-m-x0-t_end-opts19853
-Node: Function mod_impulse_nonlinear m x0 t_end [opts]19854
-Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts20076
-Node: Example20261
-Ref: #example20427
-Node: Note mod_load does not touch session state21309
-Ref: #note-mod_load-does-not-touch-session-state21521
-Node: Function and variable index21977
+Node: Function mod_step_nonlinear m x0 t_end [opts]20263
+Ref: #function-mod_step_nonlinear-m-x0-t_end-opts20545
+Node: Function mod_impulse_nonlinear m x0 t_end [opts]20546
+Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts20768
+Node: Example20953
+Ref: #example21119
+Node: Note mod_load does not touch session state22001
+Ref: #note-mod_load-does-not-touch-session-state22213
+Node: Function and variable index22669
 
 End Tag Table
 
