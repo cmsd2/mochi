@@ -89,6 +89,28 @@ Convenience wrappers over `mod_simulate`:
 
 Both accept the same opts as `mod_simulate` plus `input_index` and `magnitude`.
 
+### Function: mod_lqr (m, op_point, Q, R)
+### Function: mod_lqr (m, op_point, Q, R, override_params)
+
+Continuous-time linear-quadratic regulator for the linearised plant. Linearises around `op_point` (same semantics as `mod_state_space`), then calls `np_lqr(A, B, Q, R)` to compute the optimal feedback gain matrix.
+
+- `Q` — `n x n` state-penalty matrix (Maxima matrix or ndarray).
+- `R` — `m x m` input-penalty matrix (Maxima matrix or ndarray).
+
+Returns the `m x n` gain matrix `K` as a Maxima matrix, where the optimal control law is `u - u0 = -K * (x - x0)` with `(x0, u0)` the operating-point state and input.
+
+`mod_lqr` requires `numerics` to be loaded (`load("numerics")$`) — `np_lqr` is provided there. See the `numerics` package docs for the algorithm and its numerical caveats (eigenvalue method on the Hamiltonian; fine for well-conditioned plants, less reliable on near-singular ones).
+
+```maxima
+(%i1) m_rlc : mod_load("examples/RLCircuit.mo")$
+(%i2) K : mod_lqr(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                   matrix([1.0, 0.0], [0.0, 1.0]),
+                   matrix([1.0]))$
+(%i3) [A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$
+(%i4) /* Closed-loop A - B*K should be Hurwitz */
+      eigenvalues(float(A - B . K));
+```
+
 ### Function: mod_cascade (SS1, SS2)
 ### Function: mod_parallel (SS1, SS2)
 ### Function: mod_unity_feedback (SS, K)

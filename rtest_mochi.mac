@@ -123,6 +123,32 @@ length(t_imp);
 is(abs(last(y_imp)) < 0.05);
 true;
 
+/* ---- mod_lqr ---- */
+
+/* Compute the LQR gain for the RLC plant.  Q = I, R = 1.  Since the
+   plant itself is already stable, LQR returns a gain that further
+   damps the response — closed-loop eigenvalues should have more-
+   negative real parts than the open-loop ones, and they must remain
+   in the left half plane. */
+(K_lqr : mod_lqr(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                  matrix([1.0, 0.0], [0.0, 1.0]),
+                  matrix([1.0])),
+ true);
+true;
+
+/* K_lqr is 1x2 (one input, two states). */
+[length(K_lqr), length(first(args(K_lqr)))];
+[1, 2];
+
+/* Closed-loop A - B*K must be Hurwitz (all eigenvalues have
+   strictly negative real parts).  Check via np_eig on the numerically-
+   substituted closed-loop matrix. */
+(A_cl_rlc : A - B . K_lqr,
+ [evals_cl, vecs_cl] : np_eig(ndarray(float(A_cl_rlc))),
+ max_re : lmax(map(realpart, np_to_list(evals_cl))),
+ is(max_re < -0.01));
+true;
+
 /* ---- mod_cascade ---- */
 
 (SS_rlc : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0]), true);

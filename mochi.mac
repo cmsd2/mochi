@@ -389,6 +389,39 @@ mod__zoh_discretise(A_, B_, dt) := block(
     for j : 0 thru m - 1 do np_set(Bd, i, j, np_ref(eM, i, n + j))),
   [Ad, Bd])$
 
+/* mod_lqr(m, op_point, Q, R, [override_params])
+ *
+ * Continuous-time linear-quadratic regulator for a mochi plant.
+ * Linearises around `op_point` (same semantics as `mod_state_space`),
+ * then calls `np_lqr` to compute the optimal feedback gain matrix.
+ *
+ * Inputs:
+ *   m, op_point     — same as mod_state_space.
+ *   Q               — n x n state-penalty matrix (Maxima matrix or ndarray).
+ *   R               — m x m input-penalty matrix (Maxima matrix or ndarray).
+ *   override_params — optional list of parameter overrides, same as
+ *                     mod_state_space's third positional arg.
+ *
+ * Returns the m x n gain matrix K as a Maxima matrix.  The optimal
+ * control law is u - u0 = -K * (x - x0), where (x0, u0) is the
+ * operating point.  J = integral of (x'Qx + u'Ru) dt is minimised
+ * over the linearised plant.
+ *
+ * Requires numerics to be loaded (`load("numerics")$`).
+ */
+mod_lqr(m, op_point, Q, R, [override_params]) := block(
+  [ss_args, A, B, C, D, A_nd, B_nd, Q_nd, R_nd, K_nd],
+  if not fboundp('np_lqr) then
+    error("mod_lqr requires numerics. Load it first: load(\"numerics\")$"),
+  ss_args : append([m, op_point], override_params),
+  [A, B, C, D] : apply(mod_state_space, ss_args),
+  A_nd : ndarray(float(A)),
+  B_nd : ndarray(float(B)),
+  Q_nd : if ndarray_p(Q) then Q else ndarray(float(Q)),
+  R_nd : if ndarray_p(R) then R else ndarray(float(R)),
+  K_nd : np_lqr(A_nd, B_nd, Q_nd, R_nd),
+  np_to_matrix(K_nd))$
+
 mod_simulate(m, op_point, u_fn, t_end, [opts]) := block(
   [params, dt, A, B, C, D, A_nd, B_nd, C_nd, D_nd, Ad, Bd,
    nt, t_list, y_list, x, k, t, u, u_nd, y_vec, no],
