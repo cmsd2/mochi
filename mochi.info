@@ -58,6 +58,8 @@ File: mochi.info,  Node: Definitions for mochi,  Next: Subsystem mochi-nonlinear
 * Function mod_simulate m op_point u_fn t_end [opts]::
 * Function mod_step m op_point t_end [opts]::
 * Function mod_impulse m op_point t_end [opts]::
+* Function mod_lqr m op_point Q R::
+* Function mod_lqr m op_point Q R override_params::
 * Function mod_cascade SS1 SS2::
 * Function mod_parallel SS1 SS2::
 * Function mod_unity_feedback SS K::
@@ -163,7 +165,7 @@ File: mochi.info,  Node: Function mod_step m op_point t_end [opts],  Next: Funct
  -- Function: mod_step (M, OP_POINT, T_END, [OPTS])
 
 
-File: mochi.info,  Node: Function mod_impulse m op_point t_end [opts],  Next: Function mod_cascade SS1 SS2,  Prev: Function mod_step m op_point t_end [opts],  Up: Definitions for mochi
+File: mochi.info,  Node: Function mod_impulse m op_point t_end [opts],  Next: Function mod_lqr m op_point Q R,  Prev: Function mod_step m op_point t_end [opts],  Up: Definitions for mochi
 
  -- Function: mod_impulse (M, OP_POINT, T_END, [OPTS])
      Convenience wrappers over ‘mod_simulate’:
@@ -179,7 +181,44 @@ File: mochi.info,  Node: Function mod_impulse m op_point t_end [opts],  Next: Fu
      ‘magnitude’.
 
 
-File: mochi.info,  Node: Function mod_cascade SS1 SS2,  Next: Function mod_parallel SS1 SS2,  Prev: Function mod_impulse m op_point t_end [opts],  Up: Definitions for mochi
+File: mochi.info,  Node: Function mod_lqr m op_point Q R,  Next: Function mod_lqr m op_point Q R override_params,  Prev: Function mod_impulse m op_point t_end [opts],  Up: Definitions for mochi
+
+ -- Function: mod_lqr (M, OP_POINT, Q, R)
+
+
+File: mochi.info,  Node: Function mod_lqr m op_point Q R override_params,  Next: Function mod_cascade SS1 SS2,  Prev: Function mod_lqr m op_point Q R,  Up: Definitions for mochi
+
+ -- Function: mod_lqr (M, OP_POINT, Q, R, OVERRIDE_PARAMS)
+     Continuous-time linear-quadratic regulator for the linearised
+     plant.  Linearises around ‘op_point’ (same semantics as
+     ‘mod_state_space’), then calls ‘np_lqr(A, B, Q, R)’ to compute the
+     optimal feedback gain matrix.
+
+        • ‘Q’ -- ‘n x n’ state-penalty matrix (Maxima matrix or
+          ndarray).
+        • ‘R’ -- ‘m x m’ input-penalty matrix (Maxima matrix or
+          ndarray).
+
+     Returns the ‘m x n’ gain matrix ‘K’ as a Maxima matrix, where the
+     optimal control law is ‘u - u0 = -K * (x - x0)’ with ‘(x0, u0)’ the
+     operating-point state and input.
+
+     ‘mod_lqr’ requires ‘numerics’ to be loaded (‘load("numerics")$’) --
+     ‘np_lqr’ is provided there.  See the ‘numerics’ package docs for
+     the algorithm and its numerical caveats (eigenvalue method on the
+     Hamiltonian; fine for well-conditioned plants, less reliable on
+     near-singular ones).
+
+     (%i1) m_rlc : mod_load("examples/RLCircuit.mo")$
+     (%i2) K : mod_lqr(m_rlc, [iL = 0, vC = 0, Vin = 0],
+                        matrix([1.0, 0.0], [0.0, 1.0]),
+                        matrix([1.0]))$
+     (%i3) [A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$
+     (%i4) /* Closed-loop A - B*K should be Hurwitz */
+           eigenvalues(float(A - B . K));
+
+
+File: mochi.info,  Node: Function mod_cascade SS1 SS2,  Next: Function mod_parallel SS1 SS2,  Prev: Function mod_lqr m op_point Q R override_params,  Up: Definitions for mochi
 
  -- Function: mod_cascade (SS1, SS2)
 
@@ -535,6 +574,10 @@ Appendix A Function and variable index
                                                                 (line 3)
 * mod_load:                              Function mod_load path.
                                                                 (line 3)
+* mod_lqr:                               Function mod_lqr m op_point Q R.
+                                                                (line 3)
+* mod_lqr <1>:                           Function mod_lqr m op_point Q R override_params.
+                                                                (line 3)
 * mod_parallel:                          Function mod_parallel SS1 SS2.
                                                                 (line 3)
 * mod_print:                             Function mod_print m.  (line 3)
@@ -577,63 +620,67 @@ Node: Introduction to mochi458
 Ref: #introduction-to-mochi611
 Node: Definitions for mochi1085
 Ref: #definitions-for-mochi1272
-Node: Function mod_load path2165
-Ref: #function-mod_load-path2303
-Node: Function mod_print m3122
-Ref: #function-mod_print-m3302
-Node: Function mod_state_space m op_point3337
-Ref: #function-mod_state_space-m-op_point3562
-Node: Function mod_state_space m op_point override_params3563
-Ref: #function-mod_state_space-m-op_point-override_params3829
-Node: Function mod_state_space_symbolic m op_point5011
-Ref: #function-mod_state_space_symbolic-m-op_point5284
-Node: Function mod_simulate m op_point u_fn t_end [opts]5629
-Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5901
-Node: Function mod_step m op_point t_end [opts]6426
-Ref: #function-mod_step-m-op_point-t_end-opts6688
-Node: Function mod_impulse m op_point t_end [opts]6689
-Ref: #function-mod_impulse-m-op_point-t_end-opts6932
-Node: Function mod_cascade SS1 SS27466
-Ref: #function-mod_cascade-ss1-ss27679
-Node: Function mod_parallel SS1 SS27680
-Ref: #function-mod_parallel-ss1-ss27882
-Node: Function mod_unity_feedback SS K7883
-Ref: #function-mod_unity_feedback-ss-k8101
-Node: Function mod_transfer_function m op_point8742
-Ref: #function-mod_transfer_function-m-op_point8997
-Node: Function mod_transfer_function m op_point override_params8998
-Ref: #function-mod_transfer_function-m-op_point-override_params9260
-Node: Function mod_get m key9582
-Ref: #function-mod_get-m-key9792
-Node: Function mod__causalise m9862
-Ref: #function-mod__causalise-m10056
-Node: Function mod_dataflow m op_point [opts]11011
-Ref: #function-mod_dataflow-m-op_point-opts11229
-Node: Function mod_to_dot m op_point12190
-Ref: #function-mod_to_dot-m-op_point12419
-Node: Function mod_to_dot m op_point override_params12420
-Ref: #function-mod_to_dot-m-op_point-override_params12661
-Node: Function mod_to_mermaid m op_point12662
-Ref: #function-mod_to_mermaid-m-op_point12910
-Node: Function mod_to_mermaid m op_point override_params12911
-Ref: #function-mod_to_mermaid-m-op_point-override_params13168
-Node: Function mod_diagram m op_point [opts]13361
-Ref: #function-mod_diagram-m-op_point-opts13563
-Node: Subsystem mochi-nonlinear14879
-Ref: #subsystem-mochi-nonlinear15062
-Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]15723
-Ref: #function-mod_simulate_nonlinear-m-x0-u_fn-t_end-opts15958
-Node: Discrete events17315
-Ref: #discrete-events17436
-Node: Function mod_step_nonlinear m x0 t_end [opts]20263
-Ref: #function-mod_step_nonlinear-m-x0-t_end-opts20545
-Node: Function mod_impulse_nonlinear m x0 t_end [opts]20546
-Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts20768
-Node: Example20953
-Ref: #example21119
-Node: Note mod_load does not touch session state22001
-Ref: #note-mod_load-does-not-touch-session-state22213
-Node: Function and variable index22669
+Node: Function mod_load path2253
+Ref: #function-mod_load-path2391
+Node: Function mod_print m3210
+Ref: #function-mod_print-m3390
+Node: Function mod_state_space m op_point3425
+Ref: #function-mod_state_space-m-op_point3650
+Node: Function mod_state_space m op_point override_params3651
+Ref: #function-mod_state_space-m-op_point-override_params3917
+Node: Function mod_state_space_symbolic m op_point5099
+Ref: #function-mod_state_space_symbolic-m-op_point5372
+Node: Function mod_simulate m op_point u_fn t_end [opts]5717
+Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5989
+Node: Function mod_step m op_point t_end [opts]6514
+Ref: #function-mod_step-m-op_point-t_end-opts6776
+Node: Function mod_impulse m op_point t_end [opts]6777
+Ref: #function-mod_impulse-m-op_point-t_end-opts7023
+Node: Function mod_lqr m op_point Q R7557
+Ref: #function-mod_lqr-m-op_point-q-r7796
+Node: Function mod_lqr m op_point Q R override_params7797
+Ref: #function-mod_lqr-m-op_point-q-r-override_params8037
+Node: Function mod_cascade SS1 SS29385
+Ref: #function-mod_cascade-ss1-ss29601
+Node: Function mod_parallel SS1 SS29602
+Ref: #function-mod_parallel-ss1-ss29804
+Node: Function mod_unity_feedback SS K9805
+Ref: #function-mod_unity_feedback-ss-k10023
+Node: Function mod_transfer_function m op_point10664
+Ref: #function-mod_transfer_function-m-op_point10919
+Node: Function mod_transfer_function m op_point override_params10920
+Ref: #function-mod_transfer_function-m-op_point-override_params11182
+Node: Function mod_get m key11504
+Ref: #function-mod_get-m-key11714
+Node: Function mod__causalise m11784
+Ref: #function-mod__causalise-m11978
+Node: Function mod_dataflow m op_point [opts]12933
+Ref: #function-mod_dataflow-m-op_point-opts13151
+Node: Function mod_to_dot m op_point14112
+Ref: #function-mod_to_dot-m-op_point14341
+Node: Function mod_to_dot m op_point override_params14342
+Ref: #function-mod_to_dot-m-op_point-override_params14583
+Node: Function mod_to_mermaid m op_point14584
+Ref: #function-mod_to_mermaid-m-op_point14832
+Node: Function mod_to_mermaid m op_point override_params14833
+Ref: #function-mod_to_mermaid-m-op_point-override_params15090
+Node: Function mod_diagram m op_point [opts]15283
+Ref: #function-mod_diagram-m-op_point-opts15485
+Node: Subsystem mochi-nonlinear16801
+Ref: #subsystem-mochi-nonlinear16984
+Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]17645
+Ref: #function-mod_simulate_nonlinear-m-x0-u_fn-t_end-opts17880
+Node: Discrete events19237
+Ref: #discrete-events19358
+Node: Function mod_step_nonlinear m x0 t_end [opts]22185
+Ref: #function-mod_step_nonlinear-m-x0-t_end-opts22467
+Node: Function mod_impulse_nonlinear m x0 t_end [opts]22468
+Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts22690
+Node: Example22875
+Ref: #example23041
+Node: Note mod_load does not touch session state23923
+Ref: #note-mod_load-does-not-touch-session-state24135
+Node: Function and variable index24591
 
 End Tag Table
 

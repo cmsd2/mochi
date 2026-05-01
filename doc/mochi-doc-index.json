@@ -75,6 +75,32 @@
       "see_also": [],
       "section": "Definitions for mochi"
     },
+    "mod_lqr": {
+      "type": "Function",
+      "signature": "mod_lqr(m, op_point, Q, R, override_params)",
+      "summary": "Continuous-time linear-quadratic regulator for the linearised plant. Linearises around op_point (same semantics as mod_state_space), then calls np_lqr(A, B, Q, R) to compute the optimal feedback gain matrix.",
+      "body_md": "Continuous-time linear-quadratic regulator for the linearised plant. Linearises around `op_point` (same semantics as `mod_state_space`), then calls `np_lqr(A, B, Q, R)` to compute the optimal feedback gain matrix.\n\n- `Q` — `n x n` state-penalty matrix (Maxima matrix or ndarray).\n- `R` — `m x m` input-penalty matrix (Maxima matrix or ndarray).\n\nReturns the `m x n` gain matrix `K` as a Maxima matrix, where the optimal control law is `u - u0 = -K * (x - x0)` with `(x0, u0)` the operating-point state and input.\n\n`mod_lqr` requires `numerics` to be loaded (`load(\"numerics\")$`) — `np_lqr` is provided there. See the `numerics` package docs for the algorithm and its numerical caveats (eigenvalue method on the Hamiltonian; fine for well-conditioned plants, less reliable on near-singular ones).\n\n```maxima\n(%i1) m_rlc : mod_load(\"examples/RLCircuit.mo\")$\n(%i2) K : mod_lqr(m_rlc, [iL = 0, vC = 0, Vin = 0],\n                   matrix([1.0, 0.0], [0.0, 1.0]),\n                   matrix([1.0]))$\n(%i3) [A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$\n(%i4) /* Closed-loop A - B*K should be Hurwitz */\n      eigenvalues(float(A - B . K));\n```",
+      "examples": [
+        {
+          "input": "m_rlc : mod_load(\"examples/RLCircuit.mo\")$",
+          "output": ""
+        },
+        {
+          "input": "K : mod_lqr(m_rlc, [iL = 0, vC = 0, Vin = 0],\n                   matrix([1.0, 0.0], [0.0, 1.0]),\n                   matrix([1.0]))$",
+          "output": ""
+        },
+        {
+          "input": "[A, B, C, D] : mod_state_space(m_rlc, [iL = 0, vC = 0, Vin = 0])$",
+          "output": ""
+        },
+        {
+          "input": "/* Closed-loop A - B*K should be Hurwitz */\n      eigenvalues(float(A - B . K));",
+          "output": ""
+        }
+      ],
+      "see_also": [],
+      "section": "Definitions for mochi"
+    },
     "mod_parallel": {
       "type": "Function",
       "signature": "mod_parallel(SS1, SS2)",
