@@ -372,27 +372,30 @@ When `m` has events (extracted by the loader from rumoca's `f_z`
 block), `mod_simulate_nonlinear` runs *segment by segment* between
 requested sample times. Inside each segment:
 
-1. Call `np_cvode` watching the event detector expressions. CVODE's
-   rootfinder reports zero crossings.
-2. Drop spurious detections too close in time to the previous
-   accepted event (`event_dedup_eps = 1e-3` watchdog).
-3. For each surviving event, evaluate the user-supplied guard
-   expression at the event-time state. If `guard <= 0`, the event is
-   spurious (the original Modelica boolean isn't actually true at
-   this point — typically a re-detection of the same boundary the
-   reset just left), and we advance past it without applying the
-   reset.
-4. If `guard > 0`, apply the reset rule, then take a tiny Euler
-   half-step (`nudge_dt = 1e-4`) using the RHS evaluated at the
-   post-reset state. This pushes the state cleanly off the event
-   boundary so CVODE's rootfinder doesn't immediately re-detect the
-   same zero crossing on restart.
-5. A 100-iteration max bounds Zeno-like loops.
+1. Call `np_cvode` watching the event detector expressions, passing
+   each detector's *direction* (`-1`, `0`, or `+1`) as the `rootdir`
+   argument so CVODE only fires on the matching crossing direction.
+   For auto-extracted events the direction comes from the original
+   inequality (`<=` / `<` → -1, `>=` / `>` → +1, `==` → 0).
+2. For each fired event, evaluate the user-supplied guard expression
+   at the event-time state. If `guard <= 0`, the event is spurious
+   (the original Modelica boolean isn't actually true at this point —
+   typical for compound `and` / `or` conditions where one detector
+   fires but another conjunct is false), and we advance past it
+   without applying the reset.
+3. If `guard > 0`, apply the reset rule and resume CVODE from the
+   post-reset state at exactly the event time. The `rootdir` filter
+   suppresses re-detection of the same crossing the reset just sat
+   us on.
+4. A 100-iteration max bounds Zeno-like loops.
 
-The nudge + dedup combination feels hacky and is — proper direction-
-aware event detection would be the principled fix, requiring an
-upstream addition to numerics-sundials of `CVodeSetRootDirection`.
-Worth doing eventually; not blocking anything today.
+For backwards compatibility with user-supplied 2- or 3-element event
+tuples (no direction info), `mod_simulate_nonlinear` falls back to a
+tiny Euler half-step (`nudge_dt = 1e-4`) after a reset to push the
+state off the event surface — the legacy path before
+`CVodeSetRootDirection` landed in `numerics-sundials`. Auto-extracted
+events always carry direction, so this fallback never fires for
+models loaded from .mo files.
 
 ### Event extraction
 
@@ -400,13 +403,16 @@ Rumoca's `f_z` block describes `when` clauses as `If(branches=
 [[Edge(cond), reset_value]], else=current_value)` per state being
 reset. `mochi--extract-events` walks each `f_z` entry:
 
-- Strip the `Edge(...)` wrapper (we treat rising and falling crossings
-  the same way — direction filtering happens via the guard).
-- Decompose the boolean condition into a *list* of primitive
-  detectors (one per `Le`/`Lt`/`Ge`/`Gt`/`Eq`), with `And` and `Or`
-  appending the detector lists from each side. So `h <= 0 and v < 0`
-  produces two detectors (`h`, `v`), both registered with CVODE so
-  whichever crosses first triggers re-evaluation of the full guard.
+- Strip the `Edge(...)` wrapper (the rising/falling polarity comes
+  back in via per-detector `direction`, see below).
+- Decompose the boolean condition into a *list* of `(detector,
+  direction)` pairs (one per `Le`/`Lt`/`Ge`/`Gt`/`Eq`), with `And`
+  and `Or` appending the lists from each side. So `h <= 0 and v < 0`
+  produces two pairs `(h, -1)` and `(v, -1)`, both registered with
+  CVODE so whichever crosses first (in the matching direction)
+  triggers re-evaluation of the full guard. Direction comes from the
+  original inequality: `<=` / `<` → -1, `>=` / `>` → +1, `==` → 0.
+  `not(c)` flips each direction.
 - Build a real-valued guard expression that's positive iff the
   original boolean holds: `min(g_A, g_B)` for `And`, `max(g_A, g_B)`
   for `Or`, `-(g_c)` for `Not`. The simplifier eats away at this once
@@ -414,11 +420,12 @@ reset. `mochi--extract-events` walks each `f_z` entry:
 - `pre(x)` in reset values simplifies to `x` — at event time the
   pre-event state is exactly what CVODE returns.
 
-The struct's `events` field stores 4-element entries: `[detector,
-reset_eqs, guard, cond_pretty]`. The first three are what
-`mod_simulate_nonlinear` consumes; `cond_pretty` is the original
-boolean preserved in Maxima form so `mod_print` can render `when h
-<= 0 and v < 0 : [v = -e*v]` (rather than the derived `min(-h, -v)`
+The struct's `events` field stores 5-element entries: `[detector,
+reset_eqs, guard, cond_pretty, direction]`. `mod_simulate_nonlinear`
+uses detector + reset + guard + direction; `cond_pretty` is the
+original boolean preserved in Maxima form so `mod_print` can render
+`when h <= 0 and v < 0 : [v = -e*v]` (rather than the derived
+`min(-h, -v)`
 guard, which is correct but unhelpful for the reader).
 
 `mochi--extract-events` also walks rumoca's `f_c` block — the

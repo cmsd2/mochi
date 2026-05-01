@@ -148,9 +148,19 @@ true;
 length(mod_get(m_ball, 'events));
 2;
 
-/* Each event tuple has 4 elements: [detector, reset_eqs, guard, cond_pretty]. */
+/* Each event tuple has 5 elements:
+   [detector, reset_eqs, guard, cond_pretty, direction].  Direction
+   comes from the original inequality: `h <= 0' → -1, `v < 0' → -1. */
 length(mod_get(m_ball, 'events)[1]);
-4;
+5;
+
+/* Both detectors in the bouncing-ball `when h <= 0 and v < 0' clause
+   are `<='/`<' inequalities, so direction is -1 (falling crossings only). */
+mod_get(m_ball, 'events)[1][5];
+-1;
+
+mod_get(m_ball, 'events)[2][5];
+-1;
 
 /* The reset equation matches the Modelica `reinit(v, -e * pre(v))' —
    `pre(v)' simplifies to `v' since at event time the pre-event state

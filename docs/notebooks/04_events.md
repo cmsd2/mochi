@@ -140,9 +140,9 @@ ax_draw2d(
 ```
 
     rat: replaced 9.020562075079397e-17 by 1/11085783698142760 = 9.020562075079397e-17
-    rat: replaced -6.399996859055943 by -29749003/4648284 = -6.399996859055944
-    rat: replaced 1.547373340571312e-15 by 1/646256448770654 = 1.5473733405713123e-15
-    rat: replaced -4.095996240419254 by -32527580/7941311 = -4.095996240419246
+    rat: replaced -6.399996810006506 by -38119181/5956125 = -6.399996810006506
+    rat: replaced 4.615891002757166e-13 by 11/23830718692078 = 4.615891002757172e-13
+    rat: replaced -4.09599615995965 by -335364695/81876223 = -4.09599615995965
 
 
     
@@ -150,7 +150,7 @@ ax_draw2d(
     
 
 
-Each cusp is a bounce: the ball decelerates as it falls, reverses direction at the floor (with $80\%$ of its incoming speed because $e = 0.8$), rises to a lower peak, and comes back down. The bounces become arbitrarily close in time — Zeno-like behaviour — but `mod_simulate_nonlinear` has a watchdog (`event_dedup_eps = 1e-3`, max 100 events per segment) that breaks the loop before it explodes numerically.
+Each cusp is a bounce: the ball decelerates as it falls, reverses direction at the floor (with $80\%$ of its incoming speed because $e = 0.8$), rises to a lower peak, and comes back down. The bounces become arbitrarily close in time — Zeno-like behaviour — but `mod_simulate_nonlinear` has a watchdog (max 100 events per segment) that breaks the loop before it explodes numerically.
 
 ## 5. Phase portrait
 
@@ -184,11 +184,13 @@ The phase trajectory spirals inward: each bounce loses 36% of the kinetic energy
 
 mochi auto-extracts `when` clauses from rumoca's `f_z` block straight into the model struct's `events` field, so writing the event handling in the .mo file is enough — `mod_simulate_nonlinear` picks it up by default. `mod_print` shows what was extracted.
 
-Internally each event tuple is `[detector, reset_eqs, guard]`:
+Internally each event tuple is `[detector, reset_eqs, guard, cond_pretty, direction]`:
 
 - **Detector** — a real-valued expression whose zero crossings CVODE's rootfinder watches.
 - **Reset** — the list of state-reset equations (with `pre(...)` simplified — at event time `pre(v) = v` since CVODE returns the pre-event state).
 - **Guard** — a real-valued expression that's positive iff the original Modelica boolean condition is true. Compound conditions with `and`/`or` are translated faithfully (`min` for `and`, `max` for `or`); each primitive comparison registers its own detector, all sharing the same guard, so any one firing re-evaluates the full boolean.
+- **cond_pretty** — the original boolean preserved in Maxima form for `mod_print` (the simulator ignores it).
+- **Direction** — `-1` (falling) / `0` (any) / `+1` (rising), passed through to CVODE's `rootdir` filter so the post-reset state — which sits exactly on the event surface — doesn't immediately re-fire. Comes from the original inequality (`<=` / `<` → -1, `>=` / `>` → +1, `==` → 0).
 
 The same machinery handles ideal diodes, threshold-triggered controllers, gearbox shifts, comparator-based hysteresis — anything Modelica expresses with `when`.
 

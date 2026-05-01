@@ -791,14 +791,20 @@ inputs."
 ;;           these, since they're embedded in the f_z If branches).
 ;;
 ;; mochi-nonlinear's mod_simulate_nonlinear uses the events list at the
-;; Maxima level: each entry is `[detector, reset_eqs, guard, cond_pretty]'
-;; where DETECTOR is a real-valued expression whose zero crossings CVODE
-;; watches for, RESET_EQS is the list of state-update equations applied
-;; at the event time (with `pre(...)' simplified — at event time the
-;; pre-event state is exactly what CVODE returns), GUARD is a Maxima
-;; expression that's positive iff the original boolean condition holds
-;; at the event time (so the loop can reject spurious detections), and
-;; COND_PRETTY is the original boolean for display.
+;; Maxima level: each entry is `[detector, reset_eqs, guard, cond_pretty,
+;; direction]' where DETECTOR is a real-valued expression whose zero
+;; crossings CVODE watches for, RESET_EQS is the list of state-update
+;; equations applied at the event time (with `pre(...)' simplified — at
+;; event time the pre-event state is exactly what CVODE returns), GUARD
+;; is a Maxima expression that's positive iff the original boolean
+;; condition holds at the event time (so the loop can reject spurious
+;; detections), COND_PRETTY is the original boolean for display, and
+;; DIRECTION is -1 / 0 / +1 — the crossing direction implied by the
+;; original inequality (`<=`/`<` → -1, `>=`/`>` → +1, `==` → 0), passed
+;; through to CVODE's `rootdir' filter so the integrator only fires on
+;; the matching direction.  Without this filter the post-reset state
+;; (which sits exactly on the event surface — `h := 0' lands on `h <= 0')
+;; would re-trigger immediately.
 ;;
 ;; A single `when (A and B)' clause produces TWO entries — one detector
 ;; per primitive inequality.  Both share the same reset and guard, so
@@ -965,10 +971,12 @@ inputs."
 
 (defun mochi--fz-to-events (fz-entry)
   "Convert one rumoca f_z entry to a list of event tuples
-   `(detector reset-eqs guard cond-pretty)' — one per primitive
-   detector in the boolean condition.  All entries share the same
-   reset and guard.  Returns nil if the entry doesn't match the
-   expected If(branches=[[Edge(cond), new_val]], else=...) shape."
+   `(detector reset-eqs guard cond-pretty direction)' — one per
+   primitive detector in the boolean condition.  All entries share
+   the same reset and guard, but each carries its own direction
+   (-1, 0, +1) from `mochi--cond-to-detectors'.  Returns nil if the
+   entry doesn't match the expected
+   If(branches=[[Edge(cond), new_val]], else=...) shape."
   (let* ((lhs-name (mochi--get fz-entry :lhs))
          (rhs-node (mochi--get fz-entry :rhs)))
     (multiple-value-bind (tag if-body) (mochi--unwrap-tagged rhs-node)
@@ -989,16 +997,17 @@ inputs."
                     (mochi--mlist (list (first det)
                                         reset-eqs
                                         guard
-                                        cond-pretty)))
+                                        cond-pretty
+                                        (second det))))
                   detectors))))))
 
 (defun mochi--fc-to-events (fc-entry already-covered-conds)
   "Convert one rumoca f_c entry to a list of detector-only event tuples
-   `(detector empty-reset true cond-pretty)' — one per primitive
-   detector in the boolean condition.  Used for bare `if'-in-equation
-   relations that rumoca surfaces as conditions but with no `reinit',
-   so we want CVODE to detect the boundary cleanly without changing
-   state.  Returns nil if:
+   `(detector empty-reset true cond-pretty direction)' — one per
+   primitive detector in the boolean condition.  Used for bare
+   `if'-in-equation relations that rumoca surfaces as conditions but
+   with no `reinit', so we want CVODE to detect the boundary cleanly
+   without changing state.  Returns nil if:
 
      - the condition is already covered by an f_z-derived event (a
        `when' clause) — we don't double up; or
@@ -1025,7 +1034,8 @@ inputs."
                     (mochi--mlist (list (first det)
                                         empty-reset
                                         t
-                                        cond-pretty)))
+                                        cond-pretty
+                                        (second det))))
                   detectors))))))
 
 (defun errcatch-mochi (thunk)
@@ -1048,9 +1058,9 @@ inputs."
 
    Both pass results are flattened into one Maxima list."
   (let* ((fz-events (mapcan #'mochi--fz-to-events raw-fz))
-         ;; Each fz-event is `((mlist) detector reset guard cond-pretty)'.
-         ;; cond-pretty is element 4 (index 3 in the cdr); pull out the
-         ;; covered conditions to dedupe against.
+         ;; Each fz-event is `((mlist) detector reset guard cond-pretty
+         ;; direction)'.  cond-pretty is element 4 (index 3 in the cdr);
+         ;; pull out the covered conditions to dedupe against.
          (covered-conds (remove-duplicates
                          (mapcar (lambda (ev) (fourth (cdr ev)))
                                  fz-events)
