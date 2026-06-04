@@ -411,7 +411,7 @@ mod__zoh_discretise(A_, B_, dt) := block(
  */
 mod_lqr(m, op_point, Q, R, [override_params]) := block(
   [ss_args, A, B, C, D, A_nd, B_nd, Q_nd, R_nd, K_nd],
-  if not fboundp('np_lqr) then
+  if ?fboundp(np_lqr) = false then
     error("mod_lqr requires numerics. Load it first: load(\"numerics\")$"),
   ss_args : append([m, op_point], override_params),
   [A, B, C, D] : apply(mod_state_space, ss_args),

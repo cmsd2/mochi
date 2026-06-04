@@ -20,10 +20,10 @@
  * rumoca handed us — no operating-point assumption.
  */
 
-if not fboundp('mod_load) then
+if ?fboundp(mod_load) = false then
   error("mochi-nonlinear requires mochi.  Load it first: load(\"mochi\")$")$
 
-if not fboundp('np_cvode) then
+if ?fboundp(np_cvode) = false then
   error("mochi-nonlinear requires numerics-sundials.  Load it first:",
         " load(\"numerics-sundials\")$")$
 
