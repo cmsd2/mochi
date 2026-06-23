@@ -12,8 +12,8 @@ Early prototype. Handles a *useful subset* of Modelica:
 
 - **Single-model files** (one `model … end Name;` block).
 - **Equation-composed multi-component models** (e.g. `tank1.q_in = source;` wiring instances by direct assignment — see `examples/TwoTanks.mo`).
-- **Connector-composed multi-component models** with `connect(a.port, b.port)` and `flow`-marked variables — see `examples/RCFilter.mo`. rumoca expands the connectors into Kirchhoff-style equations; mochi translates dotted names to Maxima-safe identifiers, auto-detects instance inputs by walking class declarations, and treats connector-internal variables as algebraics.
-- **`extends` inheritance** for component reuse — see `examples/extends/RCFilterExtends.mo` (a small electrical-component library with a `partial model OnePort` base class). rumoca flattens the hierarchy; mochi walks the source's `extends` clauses transitively to inherit `input`/`output` declarations from base classes.
+- **Connector-composed multi-component models** with `connect(a.port, b.port)` and `flow`-marked variables — see `examples/RCFilter.mo`. rumoca expands the connectors into Kirchhoff-style equations and surfaces unbound instance inputs in its top-level `u` map; mochi translates dotted names to Maxima-safe identifiers and treats connector-internal variables as algebraics.
+- **`extends` inheritance** for component reuse — see `examples/extends/RCFilterExtends.mo` (a small electrical-component library with a `partial model OnePort` base class). rumoca flattens the hierarchy and carries `input` / `output` causality through inheritance; mochi reads that off the JSON directly.
 - **Discrete events / hybrid systems** (opt-in, via `mochi-nonlinear`) — `when` clauses with `reinit(state, expr)` resets, see `examples/BouncingBall.mo`. The `'events` opt to `mod_simulate_nonlinear` watches a list of `[event_expr, reset_eqs]` pairs; CVODE detects zero crossings and the loop applies the resets.
 - Declarations of parameters, state variables (with `der(...)`), inputs, outputs.
 - Continuous-time equations.
@@ -27,7 +27,7 @@ Not yet supported: conditional declarations, FMU export. Modelica Standard Libra
 
 - [Maxima](https://maxima.sourceforge.io/) running on SBCL (the standard distribution)
 - [Aximar](https://github.com/cmsd2/aximar) for notebook usage
-- [rumoca](https://github.com/CogniPilot/rumoca) — `cargo install rumoca`
+- [rumoca](https://github.com/CogniPilot/rumoca) — pinned per mochi tag. See **[Compatibility](#compatibility)** below for the exact version this checkout needs. Install with `cargo install --git https://github.com/CogniPilot/rumoca --tag <version>` (or via `make rumoca-matrix` from a local clone, which builds a tagged binary into `.rumoca-cache/<tag>/rumoca`).
 - [Quicklisp](https://www.quicklisp.org/) (one-time: `mxpm setup quicklisp`); `cl-json` is auto-installed when the package loads.
 
 Optional, only for the `mochi-nonlinear` subsystem:
@@ -54,7 +54,12 @@ Optional, for using Modelica Standard Library components in your `.mo` files:
     mod_add_source_root("/path/to/clone")$
     ```
 
-  - **OpenModelica users** get auto-discovery for free: if neither `MODELICAPATH` nor the API is set, mochi falls back to `$OPENMODELICAHOME/lib/omlibrary/Modelica*/` (the OM-managed install location, defaulting to `/opt/openmodelica` if `OPENMODELICAHOME` isn't exported). No fabricated paths beyond that.
+  - **Auto-discovery (no config needed)** kicks in when neither `MODELICAPATH` nor the API is set. mochi scans two tool-managed locations and combines the hits:
+
+    1. `$OPENMODELICAHOME/lib/omlibrary/Modelica*/` — the OpenModelica package-manager install (defaulting to `/opt/openmodelica` if `OPENMODELICAHOME` isn't exported).
+    2. `~/.modelica/library/<lib>/` — the impact / MoVE convention used by community Modelica package managers. Any `<lib>` whose subdirectory `Modelica/package.mo` exists is included.
+
+    No fabricated paths beyond those two.
 
   Run `mod_source_roots()` to inspect the resolved list. If you don't have MSL installed and aren't using OpenModelica, get a fresh clone:
 
@@ -64,6 +69,29 @@ Optional, for using Modelica Standard Library components in your `.mo` files:
   ```
 
 The `RUMOCA_BIN` environment variable can override the rumoca path; otherwise the loader looks in `$PATH` and `~/.cargo/bin`.
+
+## Compatibility
+
+rumoca reshapes its CLI and JSON schema almost every minor release. Rather than dispatch on the runtime rumoca version, each mochi tag pins a single rumoca version that's been built and tested end-to-end. **We roll forward**: no backports, no parallel paths. If you need to stay on an older rumoca, install the matching older mochi tag.
+
+| mochi tag      | rumoca version | notes                                                                                                                          |
+| -------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 0.1.x          | **v0.7.28**    | Flat CLI (`rumoca --json --model NAME -L PATH FILE`). Initial release that switched to rumoca's JSON DAE output. |
+
+### Testing across rumoca versions
+
+When rumoca cuts a new release, run the version-matrix harness to see whether the current mochi still works against it:
+
+```sh
+make rumoca-matrix                            # default set above
+make rumoca-matrix RUMOCA_VERSIONS="v0.9.9"   # just the new one
+```
+
+`scripts/rumoca-matrix.sh` builds each tag from a local rumoca clone (default `../rumoca`, override with `RUMOCA_SRC`) into `.rumoca-cache/<tag>/rumoca`, runs `mxpm test -y` against each, and prints a pass/fail matrix.
+
+If the new rumoca passes, do the migration work and cut a new mochi tag — adding the row to the table above. If it doesn't pass, leave the pin where it is and note what needs to change in a follow-up. Either way, the matrix is the source of truth: rows in the table are only added once `make rumoca-matrix` says they pass.
+
+Built binaries are cached, so re-runs only rebuild missing versions. `make clean-rumoca-matrix` wipes the cache (each tag's `target/` is hundreds of MB).
 
 ## Install
 
@@ -188,7 +216,7 @@ For the RLC example with default parameters:
 ## How it works
 
 ```
-  .mo file ─► rumoca compile --json ─► JSON DAE
+  .mo file ─► rumoca --json ─► JSON DAE
                                     │
                                     ▼
                           mochi-loader.lisp
@@ -201,7 +229,7 @@ For the RLC example with default parameters:
                         mod_transfer_function, etc.)
 ```
 
-`mod_load` is implemented in Common Lisp via `mochi-loader.lisp` — it calls `rumoca compile --json` via `uiop:run-program`, parses the JSON with `cl-json`, walks the AST, and constructs a Maxima list directly with fresh Lisp symbols. **No temp file, no Python helper, and no Maxima-side eval pass that could disturb session state** — user variables that happen to share a name with a model parameter are unaffected.
+`mod_load` is implemented in Common Lisp via `mochi-loader.lisp` — it calls `rumoca --json` via `uiop:run-program`, parses the JSON with `cl-json`, walks the AST, and constructs a Maxima list directly with fresh Lisp symbols. **No temp file, no Python helper, and no Maxima-side eval pass that could disturb session state** — user variables that happen to share a name with a model parameter are unaffected.
 
 ## Examples
 
@@ -217,7 +245,7 @@ See `examples/`:
 - `Pendulum.mo` — damped pendulum with `sin(theta)` gravity term — used by the nonlinear-simulation notebook.
 - `SwitchedRC.mo` — RC circuit with state-gated dynamics (`der(x) = if x > 0 then a else b`). Demonstrates regime-aware linearisation: `mod_state_space` picks which branch is active using the operating point so `diff` operates on a single-branch expression. Linearises to different matrices on either side of the switching boundary.
 - `BouncingBall.mo` — classic hybrid-system test case. Continuous free-fall plus a `when h <= 0 and v < 0 then reinit(v, -e * pre(v))` clause for the ground impact. Demonstrates discrete events via the `mochi-nonlinear` subsystem's `'events` opt.
-- `extends/RCFilterExtends.mo` — same RC filter as above, but composed from a `partial model OnePort` base class that Resistor / Capacitor / VoltageSource extend. Demonstrates `extends` inheritance: rumoca flattens the hierarchy and mochi follows the parent chain to inherit `input` / `output` declarations.
+- `extends/RCFilterExtends.mo` — same RC filter as above, but composed from a `partial model OnePort` base class that Resistor / Capacitor / VoltageSource extend. Demonstrates `extends` inheritance: rumoca flattens the hierarchy, carrying inherited `input` / `output` causality through into its JSON output.
 - `msl/RCFilterMSL.mo` — same RC filter again, but built from `Modelica.Electrical.Analog.Basic.{Resistor, Capacitor, Ground}` and `Modelica.Electrical.Analog.Sources.SignalVoltage` from the Modelica Standard Library. No hand-rolled connectors or base classes. Requires MSL installed (see Prerequisites). Linearises to identical `A = -2, B = 2, C = 1, D = 0`.
 
 ### Notebooks

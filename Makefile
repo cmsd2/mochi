@@ -27,9 +27,21 @@ NOTEBOOKS  := $(wildcard examples/notebooks/*.macnb)
 # Map examples/notebooks/<stem>.macnb → docs/notebooks/<stem>.md
 MD_FILES   := $(addprefix $(OUTPUT_DIR)/,$(addsuffix .md,$(basename $(notdir $(NOTEBOOKS)))))
 
-.PHONY: all clean execute render
+.PHONY: all clean execute render rumoca-matrix clean-rumoca-matrix
 
 all: $(MD_FILES)
+
+# Build a set of rumoca versions from a local clone (default
+# $(MOCHI)/../rumoca) and run `mxpm test -y` against each.  Cached binaries
+# live under .rumoca-cache/<tag>/rumoca.  Override the version set on the
+# command line:
+#   make rumoca-matrix RUMOCA_VERSIONS="v0.9.7 v0.9.8"
+RUMOCA_VERSIONS ?=
+rumoca-matrix:
+	scripts/rumoca-matrix.sh $(RUMOCA_VERSIONS)
+
+clean-rumoca-matrix:
+	rm -rf .rumoca-cache
 
 # Per-notebook rule: execute the notebook in place via aximar-mcp, then
 # convert to markdown via jupyter nbconvert.

@@ -12,3 +12,6 @@ doc/*.info
 .venv/
 __pycache__/
 *.pyc
+
+# Per-version rumoca builds cached by scripts/rumoca-matrix.sh
+.rumoca-cache/
