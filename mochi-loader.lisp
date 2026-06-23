@@ -4,7 +4,7 @@
 ;;;; Maxima struct directly, with no Python helper or temp file.
 ;;;;
 ;;;; Pipeline:
-;;;;   .mo -> rumoca --json -> cl-json:decode-json-from-string
+;;;;   .mo -> rumoca compile --emit flat-json -> cl-json:decode-json-from-string
 ;;;;       -> mochi--ast-to-maxima walks the AST -> Maxima list returned.
 ;;;;
 ;;;; Symbols used in the Modelica model become Maxima symbols ($R, $L, ...)
@@ -130,16 +130,19 @@ list.  See mod_set_source_root for the path convention."
 If MODEL-NAME is given, pass --model so rumoca picks that class as the
 top-level (required when the file contains more than one model, e.g.
 when reusable component classes are defined alongside the top-level
-system).  Source roots from MODELICAPATH are passed via --lib-path
+system).  Source roots from MODELICAPATH are passed via --source-root
 so the model can reference MSL or other library components by their
-qualified names (`Modelica.Electrical.Analog.Basic.Resistor', etc.)."
+qualified names (`Modelica.Electrical.Analog.Basic.Resistor', etc.).
+
+The `compile' subcommand + `--emit flat-json' shape was settled in
+rumoca v0.9.x — see README's Compatibility table for the current pin."
   (let* ((abs (truename mo-path))
          (dir (directory-namestring abs))
          (name (file-namestring abs))
          (source-roots (mochi--source-roots))
-         (cmd (append (list (mochi--rumoca-bin) "--json")
+         (cmd (append (list (mochi--rumoca-bin) "compile" "--emit" "flat-json")
                       (when model-name (list "--model" model-name))
-                      (mapcan (lambda (root) (list "--lib-path" root))
+                      (mapcan (lambda (root) (list "--source-root" root))
                               source-roots)
                       (list name))))
     (uiop:run-program cmd :output :string :directory dir)))
@@ -291,50 +294,136 @@ display matches NAME with dots translated to underscores."
 ((:*TAG . body)).  Peel that wrapper and return (values TAG BODY)."
   (values (caar node) (cdar node)))
 
-(defun mochi--cref-name (cref-body)
-  "CREF-BODY is the unwrapped body of a ComponentReference (i.e. a
-plist with :PARTS and :LOCAL).  Each part is `((:IDENT . ((:TEXT . name)
-...)) (:SUBS . ...))'.  Join the part texts with `.' to form the
-hierarchical Modelica name (most flattened refs already arrive as a
-single part whose text contains the dotted name)."
-  (let ((parts (mochi--get cref-body :parts)))
-    (format nil "~{~A~^.~}"
-            (mapcar (lambda (part)
-                      (mochi--get (mochi--get part :ident) :text))
-                    parts))))
+;; --- AST walker (rumoca v0.9.x flat-json shape) -----------------------
+;;
+;; Tagged-enum node wrappers use cl-json's `((:*TAG . body))' encoding.
+;; Each body is an alist:
+;;
+;;   VarRef        body: ((:NAME . ((:NAME . "dotted") (:COMPONENT--REF . ...) ...))
+;;                        (:SUBSCRIPTS . ...) (:SPAN . ...))
+;;                 — `body.name.name' is the flat dotted Modelica name.
+;;   Literal       body: ((:VALUE . ((:REAL . 1.0) | (:INTEGER . 0) |
+;;                                   (:BOOL . t) | (:STRING . "..."))) (:SPAN . ...))
+;;   Binary        body: ((:OP . "Mul") (:LHS . ...) (:RHS . ...) (:SPAN . ...))
+;;   Unary         body: ((:OP . "Minus") (:RHS . ...) (:SPAN . ...))
+;;   BuiltinCall   body: ((:FUNCTION . "Der") (:ARGS . (...)) (:SPAN . ...))
+;;   If            body: ((:BRANCHES . ((cond1 val1) ...)) (:ELSE--BRANCH . ...))
+;;   Array         body: ((:ELEMENTS . (...)) (:SPAN . ...))
+;;   Reinit        body: ((:STATE . "name") (:VALUE . ...))
+;;                 — only seen inside when_clauses[*].equations; handled by
+;;                   the event extractor, not by mochi--ast-to-maxima.
+;;
+;; Notable v0.9.x changes vs v0.7.x: `:op' is a plain string (no
+;; tagged-enum wrap), BuiltinCall function names are Pascal-cased
+;; (\"Der\", \"Pre\", \"Sin\"), and there is no ComponentReference
+;; wrapper node — flat dotted names live directly on VarRef.
 
-(defun mochi--cref-to-maxima (cref-body)
-  "Map an unwrapped ComponentReference body to a Maxima `$name' symbol."
-  (mochi--mxsym (mochi--cref-name cref-body)))
+(defun mochi--varref-name (body)
+  "Pull the dotted Modelica name from a VarRef body."
+  (mochi--get (mochi--get body :name) :name))
 
-(defun mochi--terminal-to-maxima (body)
-  "Decode a Terminal (literal) node.  rumoca tags the literal kind in
-:TERMINAL--TYPE (a JSON string like \"UnsignedReal\" or \"UnsignedInteger\")
-and stores the source text in :TOKEN.TEXT — we parse the text according
-to the kind so downstream code gets a real Lisp number / boolean /
-string rather than the raw source slice."
-  (let* ((kind (mochi--get body :terminal--type))
-         (text (mochi--get (mochi--get body :token) :text)))
+(defun mochi--varref-to-maxima (body)
+  (mochi--mxsym (mochi--varref-name body)))
+
+(defun mochi--literal-to-maxima (body)
+  "Decode a Literal node.  body.value is a single-key tagged enum:
+{Real: f}, {Integer: i}, {Boolean: b}, {String: s}."
+  (let* ((value (mochi--get body :value))
+         (tag (caar value))
+         (raw (cdar value)))
+    (case tag
+      (:*real    (coerce raw 'double-float))
+      (:*integer raw)
+      (:*boolean raw)
+      (:*string  raw)
+      (otherwise (error "mochi: unknown literal value tag ~S" tag)))))
+
+(defun mochi--binary-to-maxima (body)
+  (let* ((op  (mochi--get body :op))
+         (lhs (mochi--ast-to-maxima (mochi--get body :lhs)))
+         (rhs (mochi--ast-to-maxima (mochi--get body :rhs))))
     (cond
-      ((or (string= kind "UnsignedReal") (string= kind "Real"))
-       ;; read-from-string on a clean numeric literal returns a Lisp number;
-       ;; force float so `1' inside a parameter still works arithmetically.
-       (let ((*read-default-float-format* 'double-float))
-         (read-from-string text)))
-      ((or (string= kind "UnsignedInteger") (string= kind "Integer"))
-       (parse-integer text))
-      ((string= kind "Bool")
-       (cond ((string-equal text "true") t)
-             ((string-equal text "false") nil)
-             (t (error "mochi: unrecognised Bool terminal text ~S" text))))
-      ((string= kind "String")
-       text)
-      (t
-       (error "mochi: unknown terminal_type ~S (text ~S)" kind text)))))
+      ((string= op "Add") (list '(mplus) lhs rhs))
+      ((string= op "Sub") (list '(mplus) lhs (list '(mtimes) -1 rhs)))
+      ((string= op "Mul") (list '(mtimes) lhs rhs))
+      ((string= op "Div") (list '(mtimes) lhs (list '(mexpt) rhs -1)))
+      ;; rumoca tags Modelica's `^' as either Pow or Exp historically;
+      ;; both map to Maxima's mexpt.  Neither relates to Maxima's exp(x).
+      ((or (string= op "Pow") (string= op "Exp"))
+       (list '(mexpt) lhs rhs))
+      ((string= op "Eq")  (list '(mequal) lhs rhs))
+      ;; Comparison operators show up inside MSL If branches
+      ;; (e.g. `pid.D.zeroGain = (Td < 1e-12)`).
+      ((string= op "Lt")  (list '(mlessp)    lhs rhs))
+      ((string= op "Le")  (list '(mleqp)     lhs rhs))
+      ((string= op "Gt")  (list '(mgreaterp) lhs rhs))
+      ((string= op "Ge")  (list '(mgeqp)     lhs rhs))
+      ((string= op "Ne")  (list '(mnotequal) lhs rhs))
+      ((string= op "And") (list '(mand)      lhs rhs))
+      ((string= op "Or")  (list '(mor)       lhs rhs))
+      (t (error "mochi: unsupported binary op ~S" op)))))
+
+(defun mochi--unary-to-maxima (body)
+  (let* ((op  (mochi--get body :op))
+         (arg (mochi--ast-to-maxima (mochi--get body :rhs))))
+    (cond
+      ((string= op "Minus") (list '(mtimes) -1 arg))
+      ((string= op "Plus")  arg)
+      ((string= op "Not")   (list '(mnot) arg))
+      (t (error "mochi: unsupported unary op ~S" op)))))
+
+(defun mochi--builtin-call-to-maxima (body)
+  "Translate a BuiltinCall node.  body.function is Pascal-cased
+(`Der', `Pre', `Sin', `Max', ...)."
+  (let* ((fn (mochi--get body :function))
+         (raw-args (mochi--get body :args))
+         (args (mapcar #'mochi--ast-to-maxima raw-args)))
+    (cond
+      ((string= fn "Der")
+       ;; der(x) → der_x as a single Maxima symbol.  Read the VarRef name
+       ;; directly so case-inversion runs once and matches mod_get(m,
+       ;; 'derivs).
+       (let* ((arg-body (cdar (first raw-args)))
+              (var-name (mochi--varref-name arg-body)))
+         (mochi--mxsym (concatenate 'string "der_" var-name))))
+      ((string= fn "Pre")
+       ;; pre(x) — Modelica's pre-event value.  Wrap so mochi--strip-pre
+       ;; can collapse it to plain x at event time.
+       (cons '($pre) args))
+      ((string= fn "Sin")   (cons '(%sin) args))
+      ((string= fn "Cos")   (cons '(%cos) args))
+      ((string= fn "Tan")   (cons '(%tan) args))
+      ((string= fn "Asin")  (cons '(%asin) args))
+      ((string= fn "Acos")  (cons '(%acos) args))
+      ((string= fn "Atan")  (cons '(%atan) args))
+      ((string= fn "Atan2") (cons '(%atan2) args))
+      ((string= fn "Sinh")  (cons '(%sinh) args))
+      ((string= fn "Cosh")  (cons '(%cosh) args))
+      ((string= fn "Tanh")  (cons '(%tanh) args))
+      ((string= fn "Exp")   (cons '(%exp) args))
+      ((string= fn "Log")   (cons '(%log) args))
+      ((string= fn "Sqrt")  (cons '(%sqrt) args))
+      ((string= fn "Abs")   (cons '(mabs) args))
+      ;; Modelica's `min(...)' / `max(...)' accept either a vararg list
+      ;; or a single array argument (`max({a, b, c})').  Maxima's $min /
+      ;; $max are vararg, so when we see a single array arg, splat its
+      ;; elements into the function call.
+      ((or (string= fn "Min") (string= fn "Max"))
+       (let* ((maxima-fn (if (string= fn "Min") '($min) '($max)))
+              (single-array-p
+                (and (= (length args) 1)
+                     (consp (first args))
+                     (consp (car (first args)))
+                     (eq (caar (first args)) 'maxima::mlist)))
+              (effective-args
+                (if single-array-p (cdr (first args)) args)))
+         (cons maxima-fn effective-args)))
+      ((string= fn "Floor") (cons '($floor) args))
+      ((or (string= fn "Ceil") (string= fn "Ceiling")) (cons '($ceiling) args))
+      (t (cons (list (mochi--mxsym (string-downcase fn))) args)))))
 
 (defun mochi--ast-to-maxima (node)
-  "Convert a rumoca JSON AST expression node (cl-json's parsed form)
-into a Maxima expression in Lisp form."
+  "Convert a rumoca flat-json AST expression node into a Maxima Lisp form."
   (cond
     ((numberp node) node)
     ((stringp node) node)
@@ -345,27 +434,17 @@ into a Maxima expression in Lisp form."
     (t
      (multiple-value-bind (tag body) (mochi--unwrap-tagged node)
        (case tag
-         (:*component-reference (mochi--cref-to-maxima body))
-         (:*terminal            (mochi--terminal-to-maxima body))
-         (:*binary              (mochi--binary-to-maxima body))
-         (:*unary               (mochi--unary-to-maxima body))
-         (:*function-call       (mochi--function-call-to-maxima body))
-         (:*parenthesized       (mochi--ast-to-maxima (mochi--get body :inner)))
+         (:*var-ref       (mochi--varref-to-maxima body))
+         (:*literal       (mochi--literal-to-maxima body))
+         (:*binary        (mochi--binary-to-maxima body))
+         (:*unary         (mochi--unary-to-maxima body))
+         (:*builtin-call  (mochi--builtin-call-to-maxima body))
+         (:*parenthesized (mochi--ast-to-maxima (mochi--get body :inner)))
          (:*array
-          ;; Modelica's `{a, b, c}' literal — represent as a Maxima list.
-          ;; Matrices use the same node with is_matrix=true; we don't try
-          ;; to distinguish here — Maxima lists are fine for the parameter
-          ;; / start-value use cases that exercise this path.
           (cons '(mlist) (mapcar #'mochi--ast-to-maxima
-                                  (mochi--get body :elements))))
+                                 (mochi--get body :elements))))
          (:*if
-          ;; Modelica `if cond then val ... else else_val'.  rumoca emits
-          ;; an If with one or more (cond, value) branches plus an else.
-          ;; Translate to Maxima's mcond form: `((mcond) c1 v1 ... t e)'.
-          ;; When cond resolves to a constant (typical for parameter-
-          ;; gated paths in MSL blocks like pid.D.zeroGain), the
-          ;; substitution + simplifier collapses to the right branch.
-          (let* ((branches (mochi--get body :branches))
+          (let* ((branches    (mochi--get body :branches))
                  (else-branch (mochi--get body :else--branch))
                  (pairs (mapcan (lambda (br)
                                   (list (mochi--ast-to-maxima (first br))
@@ -376,113 +455,6 @@ into a Maxima expression in Lisp form."
                     (list t (mochi--ast-to-maxima else-branch)))))
          (otherwise
           (error "mochi: unsupported AST tag ~S" tag)))))))
-
-(defun mochi--simple-residual (fx-entry)
-  "FX-ENTRY is `((:*SIMPLE . ((:LHS . lhs-ast) (:RHS . rhs-ast))))'.
-Return the residual `lhs - rhs' as a Maxima Lisp expression."
-  (multiple-value-bind (tag body) (mochi--unwrap-tagged fx-entry)
-    (unless (eq tag :*simple)
-      (error "mochi: unexpected fx entry ~S" tag))
-    (let ((lhs (mochi--ast-to-maxima (mochi--get body :lhs)))
-          (rhs (mochi--ast-to-maxima (mochi--get body :rhs))))
-      (list '(mplus) lhs (list '(mtimes) -1 rhs)))))
-
-(defun mochi--binary-to-maxima (body)
-  (let* ((op-node (mochi--get body :op))
-         (op-tag (caar op-node))   ; op-node is a one-key alist like ((:*MUL ...))
-         (lhs (mochi--ast-to-maxima (mochi--get body :lhs)))
-         (rhs (mochi--ast-to-maxima (mochi--get body :rhs))))
-    (case op-tag
-      (:*add (list '(mplus) lhs rhs))
-      (:*sub (list '(mplus) lhs (list '(mtimes) -1 rhs)))
-      (:*mul (list '(mtimes) lhs rhs))
-      (:*div (list '(mtimes) lhs (list '(mexpt) rhs -1)))
-      (:*pow (list '(mexpt) lhs rhs))
-      (:*exp (list '(mexpt) lhs rhs))   ; rumoca tag for `^' in Modelica source.
-                                        ; (Modelica's `^' is exponentiation; this
-                                        ; isn't related to Maxima's `exp(...)' or
-                                        ; matrix-exponential operators.)
-      (:*eq  (list '(mequal) lhs rhs))
-      ;; Comparison operators that show up inside If branches in
-      ;; MSL blocks (e.g. pid.D.zeroGain = (Td < 1e-12)).
-      (:*lt  (list '(mlessp)    lhs rhs))
-      (:*le  (list '(mleqp)     lhs rhs))
-      (:*gt  (list '(mgreaterp) lhs rhs))
-      (:*ge  (list '(mgeqp)     lhs rhs))
-      (:*ne  (list '(mnotequal) lhs rhs))
-      (:*and (list '(mand)      lhs rhs))
-      (:*or  (list '(mor)       lhs rhs))
-      (otherwise
-       (error "mochi: unsupported binary op ~S" op-tag)))))
-
-(defun mochi--unary-to-maxima (body)
-  ;; rumoca's Unary node carries the operand under :RHS.
-  (let* ((op-node (mochi--get body :op))
-         (op-tag (caar op-node))
-         (arg (mochi--ast-to-maxima (mochi--get body :rhs))))
-    (case op-tag
-      (:*minus (list '(mtimes) -1 arg))
-      (:*plus  arg)
-      (:*not   (list '(mnot) arg))
-      (otherwise
-       (error "mochi: unsupported unary op ~S" op-tag)))))
-
-(defun mochi--function-call-to-maxima (body)
-  "Translate a FunctionCall node.  COMP is an unwrapped ComponentReference
-(carrying the function name in its first part) and ARGS is a list of
-argument AST nodes.  rumoca passes the Modelica-source name through
-verbatim — lower-case for builtins (`der', `sin', ...), original case
-for user-defined classes."
-  (let* ((comp (mochi--get body :comp))
-         (fn (mochi--cref-name comp))
-         (raw-args (mochi--get body :args))
-         (args (mapcar #'mochi--ast-to-maxima raw-args)))
-    (cond
-      ((string= fn "der")
-       ;; der(x) → der_x as a single Maxima symbol.  Reach into the raw AST
-       ;; for the ComponentReference's part text so case-inversion is
-       ;; applied exactly once — otherwise this `der_*' symbol would
-       ;; diverge from the one in (mod_get m 'derivs).
-       (let* ((arg-body (cdar (first raw-args)))
-              (var-name (mochi--cref-name arg-body)))
-         (mochi--mxsym (concatenate 'string "der_" var-name))))
-      ((string= fn "pre")
-       ;; pre(x) — Modelica's pre-event value.  Wrap in a Maxima function
-       ;; symbol so event-time substitution (mochi--strip-pre) can rewrite
-       ;; it back to plain x when materialising reset expressions.
-       (cons '($pre) args))
-      ((string= fn "sin")   (cons '(%sin) args))
-      ((string= fn "cos")   (cons '(%cos) args))
-      ((string= fn "tan")   (cons '(%tan) args))
-      ((string= fn "asin")  (cons '(%asin) args))
-      ((string= fn "acos")  (cons '(%acos) args))
-      ((string= fn "atan")  (cons '(%atan) args))
-      ((string= fn "atan2") (cons '(%atan2) args))
-      ((string= fn "sinh")  (cons '(%sinh) args))
-      ((string= fn "cosh")  (cons '(%cosh) args))
-      ((string= fn "tanh")  (cons '(%tanh) args))
-      ((string= fn "exp")   (cons '(%exp) args))
-      ((string= fn "log")   (cons '(%log) args))
-      ((string= fn "sqrt")  (cons '(%sqrt) args))
-      ((string= fn "abs")   (cons '(mabs) args))
-      ;; Modelica's `min(...)' / `max(...)' accept either a vararg list
-      ;; or a single array argument (`max({a, b, c})').  Maxima's $min /
-      ;; $max are vararg, so when we see a single array arg, splat its
-      ;; elements into the function call.
-      ((or (string= fn "min") (string= fn "max"))
-       (let* ((maxima-fn (if (string= fn "min") '($min) '($max)))
-              (single-array-p
-                (and (= (length args) 1)
-                     (consp (first args))
-                     (consp (car (first args)))
-                     (eq (caar (first args)) 'maxima::mlist)))
-              (effective-args
-                (if single-array-p (cdr (first args)) args)))
-         (cons maxima-fn effective-args)))
-      ((string= fn "floor") (cons '($floor) args))
-      ((or (string= fn "ceil") (string= fn "ceiling")) (cons '($ceiling) args))
-      (t
-       (cons (list (mochi--mxsym fn)) args)))))
 
 ;; --- Model-name discovery from the .mo source --------------------------
 ;; rumoca's CLI requires `--model NAME'.  When a caller invokes mod_load
@@ -572,16 +544,13 @@ last one declared; reusable building-block classes come earlier."
 
 ;; --- Event extraction (Modelica `when' clauses) ------------------------
 ;;
-;; rumoca surfaces `when' clauses through three top-level keys keyed by
-;; synthesised condition-variable names (c0, c1, ...):
-;;   :c   — declares the boolean condition variables.
-;;   :fc  — { cN: <cond-ast> } — the boolean expression that activates cN.
-;;   :fr  — { cN: <Assignment-ast> } — the state assignment that runs when
-;;          cN becomes true (the Modelica `reinit' / `when ... then var := ...').
-;;
-;; Conditions without a matching :fr entry are implicit boundaries from
-;; bare `if'-in-equation relations (saturation, sign-flips, ideal diodes)
-;; — we still emit a detector so CVODE stops cleanly at the discontinuity.
+;; rumoca's flat-json surfaces each `when' clause as one entry in the
+;; top-level :WHEN--CLAUSES list:
+;;     ((:CONDITION . <bool-AST>)
+;;      (:EQUATIONS . (<Reinit-node> ...))
+;;      (:SPAN . ...))
+;; where each Reinit body is `((:STATE . "name") (:VALUE . AST))' and
+;; encodes a Modelica `reinit(name, value)' assignment.
 ;;
 ;; mochi-nonlinear's mod_simulate_nonlinear uses the events list at the
 ;; Maxima level: each entry is `[detector, reset_eqs, guard, cond_pretty,
@@ -617,19 +586,19 @@ last one declared; reusable building-block classes come earlier."
      (mochi--strip-pre (cadr expr)))
     (t (cons (car expr) (mapcar #'mochi--strip-pre (cdr expr))))))
 
-(defun mochi--ast-binary-op-tag (node)
-  "Return the binary-op tag (e.g. :*le, :*and) for a Binary AST node,
-   or nil if NODE isn't a Binary."
+(defun mochi--ast-binary-op (node)
+  "Return the binary-op string (e.g. \"Le\", \"And\") for a Binary AST
+node, or nil if NODE isn't a Binary."
   (multiple-value-bind (tag body) (mochi--unwrap-tagged node)
     (when (eq tag :*binary)
-      (caar (mochi--get body :op)))))
+      (mochi--get body :op))))
 
 (defun mochi--cond-unary-not-body (node)
-  "If NODE is a Unary with op = Not, return its body alist.  Else nil."
+  "If NODE is a Unary with op = \"Not\", return its body alist.  Else nil."
   (multiple-value-bind (tag body) (mochi--unwrap-tagged node)
     (when (eq tag :*unary)
-      (let ((op-tag (caar (mochi--get body :op))))
-        (when (eq op-tag :*not) body)))))
+      (let ((op (mochi--get body :op)))
+        (when (and (stringp op) (string= op "Not")) body)))))
 
 (defun mochi--lhs-rhs-mx (node)
   "NODE is a Binary; return (values LHS-MX RHS-MX) — the operands as
@@ -648,22 +617,9 @@ last one declared; reusable building-block classes come earlier."
    DIR is -1 (falling crossing activates the inequality), +1 (rising),
    or 0 (any).  All conjuncts AND disjuncts are visited so any
    inequality firing triggers re-evaluation of the guard."
-  (let ((tag (mochi--ast-binary-op-tag cond-node)))
-    (case tag
-      ((:*le :*lt)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list (list (mochi--mx-sub lhs rhs) -1))))
-      ((:*ge :*gt)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list (list (mochi--mx-sub lhs rhs) +1))))
-      ((:*eq)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list (list (mochi--mx-sub lhs rhs) 0))))
-      ((:*and :*or)
-       (let ((body (cdar cond-node)))
-         (append (mochi--cond-to-detectors (mochi--get body :lhs))
-                 (mochi--cond-to-detectors (mochi--get body :rhs)))))
-      (otherwise
+  (let ((op (mochi--ast-binary-op cond-node)))
+    (cond
+      ((null op)
        (let ((not-body (mochi--cond-unary-not-body cond-node)))
          (cond
            (not-body
@@ -673,37 +629,30 @@ last one declared; reusable building-block classes come earlier."
                     (mochi--cond-to-detectors (mochi--get not-body :rhs))))
            (t
             (error "mochi: unsupported event condition AST tag ~S"
-                   (and (consp cond-node) (caar cond-node))))))))))
+                   (and (consp cond-node) (caar cond-node)))))))
+      ((or (string= op "Le") (string= op "Lt"))
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list (list (mochi--mx-sub lhs rhs) -1))))
+      ((or (string= op "Ge") (string= op "Gt"))
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list (list (mochi--mx-sub lhs rhs) +1))))
+      ((string= op "Eq")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list (list (mochi--mx-sub lhs rhs) 0))))
+      ((or (string= op "And") (string= op "Or"))
+       (let ((body (cdar cond-node)))
+         (append (mochi--cond-to-detectors (mochi--get body :lhs))
+                 (mochi--cond-to-detectors (mochi--get body :rhs)))))
+      (t
+       (error "mochi: unsupported event condition binary op ~S" op)))))
 
 (defun mochi--cond-to-guard (cond-node)
   "Convert a boolean condition AST to a real-valued Maxima expression
    that is > 0 iff the condition holds.  Caller checks `> 0' to decide
    whether to fire the reset."
-  (let ((tag (mochi--ast-binary-op-tag cond-node)))
-    (case tag
-      ((:*le :*lt)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         ;; lhs <= rhs  ⇔  rhs - lhs ≥ 0
-         (mochi--mx-sub rhs lhs)))
-      ((:*ge :*gt)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (mochi--mx-sub lhs rhs)))
-      ((:*eq)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         ;; -|diff|^2 — zero only at equality, negative otherwise.
-         (let ((diff (mochi--mx-sub lhs rhs)))
-           (list '(mtimes) -1 (list '(mexpt) diff 2)))))
-      ((:*and)
-       (let ((body (cdar cond-node)))
-         (list '($min)
-               (mochi--cond-to-guard (mochi--get body :lhs))
-               (mochi--cond-to-guard (mochi--get body :rhs)))))
-      ((:*or)
-       (let ((body (cdar cond-node)))
-         (list '($max)
-               (mochi--cond-to-guard (mochi--get body :lhs))
-               (mochi--cond-to-guard (mochi--get body :rhs)))))
-      (otherwise
+  (let ((op (mochi--ast-binary-op cond-node)))
+    (cond
+      ((null op)
        (let ((not-body (mochi--cond-unary-not-body cond-node)))
          (cond
            (not-body
@@ -711,222 +660,186 @@ last one declared; reusable building-block classes come earlier."
                   (mochi--cond-to-guard (mochi--get not-body :rhs))))
            (t
             (error "mochi: unsupported event condition AST tag ~S"
-                   (and (consp cond-node) (caar cond-node))))))))))
+                   (and (consp cond-node) (caar cond-node)))))))
+      ((or (string= op "Le") (string= op "Lt"))
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         ;; lhs <= rhs  ⇔  rhs - lhs ≥ 0
+         (mochi--mx-sub rhs lhs)))
+      ((or (string= op "Ge") (string= op "Gt"))
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (mochi--mx-sub lhs rhs)))
+      ((string= op "Eq")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         ;; -|diff|^2 — zero only at equality, negative otherwise.
+         (let ((diff (mochi--mx-sub lhs rhs)))
+           (list '(mtimes) -1 (list '(mexpt) diff 2)))))
+      ((string= op "And")
+       (let ((body (cdar cond-node)))
+         (list '($min)
+               (mochi--cond-to-guard (mochi--get body :lhs))
+               (mochi--cond-to-guard (mochi--get body :rhs)))))
+      ((string= op "Or")
+       (let ((body (cdar cond-node)))
+         (list '($max)
+               (mochi--cond-to-guard (mochi--get body :lhs))
+               (mochi--cond-to-guard (mochi--get body :rhs)))))
+      (t
+       (error "mochi: unsupported event condition binary op ~S" op)))))
 
 (defun mochi--cond-pretty (cond-node)
   "Convert a boolean condition AST to a Maxima expression preserving
    the original op shape, for display via mod_print."
-  (let ((tag (mochi--ast-binary-op-tag cond-node)))
-    (case tag
-      ((:*le)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list '(mleqp) lhs rhs)))
-      ((:*lt)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list '(mlessp) lhs rhs)))
-      ((:*ge)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list '(mgeqp) lhs rhs)))
-      ((:*gt)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list '(mgreaterp) lhs rhs)))
-      ((:*eq)
-       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
-         (list '(mequal) lhs rhs)))
-      ((:*and)
-       (let ((body (cdar cond-node)))
-         (list '(mand)
-               (mochi--cond-pretty (mochi--get body :lhs))
-               (mochi--cond-pretty (mochi--get body :rhs)))))
-      ((:*or)
-       (let ((body (cdar cond-node)))
-         (list '(mor)
-               (mochi--cond-pretty (mochi--get body :lhs))
-               (mochi--cond-pretty (mochi--get body :rhs)))))
-      (otherwise
+  (let ((op (mochi--ast-binary-op cond-node)))
+    (cond
+      ((null op)
        (let ((not-body (mochi--cond-unary-not-body cond-node)))
          (cond
            (not-body
             (list '(mnot) (mochi--cond-pretty (mochi--get not-body :rhs))))
            (t
             ;; Fall back to plain conversion (best effort).
-            (mochi--ast-to-maxima cond-node))))))))
+            (mochi--ast-to-maxima cond-node)))))
+      ((string= op "Le")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mleqp) lhs rhs)))
+      ((string= op "Lt")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mlessp) lhs rhs)))
+      ((string= op "Ge")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mgeqp) lhs rhs)))
+      ((string= op "Gt")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mgreaterp) lhs rhs)))
+      ((string= op "Eq")
+       (multiple-value-bind (lhs rhs) (mochi--lhs-rhs-mx cond-node)
+         (list '(mequal) lhs rhs)))
+      ((string= op "And")
+       (let ((body (cdar cond-node)))
+         (list '(mand)
+               (mochi--cond-pretty (mochi--get body :lhs))
+               (mochi--cond-pretty (mochi--get body :rhs)))))
+      ((string= op "Or")
+       (let ((body (cdar cond-node)))
+         (list '(mor)
+               (mochi--cond-pretty (mochi--get body :lhs))
+               (mochi--cond-pretty (mochi--get body :rhs)))))
+      (t
+       (mochi--ast-to-maxima cond-node)))))
 
-(defun mochi--fr-reset-eq (fr-entry)
-  "Convert an :fr Assignment node `((:*ASSIGNMENT . ((:COMP . cref)
-(:VALUE . value-ast))))' into a Maxima equation `lhs = rhs', with
-`pre(...)' references stripped (event-time pre-state equals the value
-CVODE returns)."
-  (multiple-value-bind (tag body) (mochi--unwrap-tagged fr-entry)
-    (unless (eq tag :*assignment)
-      (error "mochi: unexpected fr entry tag ~S" tag))
-    (let* ((comp (mochi--get body :comp))
-           (lhs-sym (mochi--cref-to-maxima comp))
+(defun mochi--reinit-to-eq (reinit-node)
+  "Translate `((:*REINIT . ((:STATE . name) (:VALUE . ast))))' to a
+Maxima equation `name = value' with `pre(...)' stripped (the pre-event
+state at event time equals the value CVODE returns)."
+  (multiple-value-bind (tag body) (mochi--unwrap-tagged reinit-node)
+    (unless (eq tag :*reinit)
+      (error "mochi: unexpected when-clause equation tag ~S" tag))
+    (let* ((state-name (mochi--get body :state))
            (value-mx (mochi--strip-pre
                       (mochi--ast-to-maxima (mochi--get body :value)))))
-      (list '(mequal) lhs-sym value-mx))))
-
-(defun mochi--cond-to-events (cond-node reset-eqs)
-  "Build event tuples for a single boolean condition AST.  Emits one
-tuple per primitive comparison reachable from the root (so any leaf
-inequality firing forces re-evaluation of the conjunction).  RESET-EQS
-is the Maxima reset list to attach to each tuple; pass an empty list
-for detector-only events."
-  (let ((detectors (mochi--cond-to-detectors cond-node))
-        (guard (mochi--cond-to-guard cond-node))
-        (cond-pretty (mochi--cond-pretty cond-node)))
-    (mapcar (lambda (det)
-              (mochi--mlist (list (first det)
-                                  reset-eqs
-                                  guard
-                                  cond-pretty
-                                  (second det))))
-            detectors)))
+      (list '(mequal) (mochi--mxsym state-name) value-mx))))
 
 (defun errcatch-mochi (thunk)
   "Run THUNK, returning its result on success or NIL on any error.
-Used to skip :fc entries whose condition AST isn't shaped like a
-real-valued boundary detector (e.g. a bare Boolean discrete-mode flag
-like PID's `local_reset')."
+Used to skip when_clauses whose condition isn't shaped like a real-
+valued boundary detector (e.g. a bare Boolean discrete-mode flag)."
   (handler-case (funcall thunk)
     (error () nil)))
 
-(defun mochi--cond-to-events-safe (cond-node reset-eqs)
-  "Wrap mochi--cond-to-events to drop conditions that aren't comparison-
-shaped — they can't be turned into a real-valued zero-crossing
-detector."
-  (errcatch-mochi (lambda () (mochi--cond-to-events cond-node reset-eqs))))
+(defun mochi--when-clause-to-events (wc)
+  "Convert one :WHEN--CLAUSES entry to a list of event tuples
+`(detector reset-eqs guard cond-pretty direction)' — one per primitive
+comparison in the condition.  All tuples share the same reset and guard
+but each carries its own direction."
+  (let* ((cond-node (mochi--get wc :condition))
+         (reset-eqs (mochi--mlist
+                     (mapcar #'mochi--reinit-to-eq
+                             (mochi--get wc :equations)))))
+    (or (errcatch-mochi
+         (lambda ()
+           (let ((detectors   (mochi--cond-to-detectors cond-node))
+                 (guard       (mochi--cond-to-guard       cond-node))
+                 (cond-pretty (mochi--cond-pretty         cond-node)))
+             (mapcar (lambda (det)
+                       (mochi--mlist (list (first det)
+                                           reset-eqs
+                                           guard
+                                           cond-pretty
+                                           (second det))))
+                     detectors))))
+        '())))
 
-(defun mochi--extract-events (raw-c raw-fc raw-fr)
-  "Build the events list for the model struct.  For each condition
-variable cN declared in :c, look up its boolean expression in :fc.
-If :fr has a matching Assignment, attach it as the reset.  Otherwise
-emit a detector-only event so CVODE's rootfinder still stops cleanly
-at the discontinuity (saturation, sign-flips, ideal diodes).
+(defun mochi--collect-state-dependent-conds (raw-eqs state-names)
+  "Walk RAW-EQS for `If' nodes; return the list of branch conditions
+whose expressions reference any of STATE-NAMES.
 
-Returns a flattened Maxima list of `[detector, reset_eqs, guard,
-cond_pretty, direction]' tuples."
-  (declare (ignore raw-c))
-  (let ((events '()))
-    (dolist (fc-entry raw-fc)
-      (let* ((cname (car fc-entry))
-             (cond-node (cdr fc-entry))
-             (fr-node (cdr (assoc cname raw-fr)))
-             (reset-eqs (if fr-node
-                            (mochi--mlist (list (mochi--fr-reset-eq fr-node)))
-                            (mochi--mlist '())))
-             (tuples (mochi--cond-to-events-safe cond-node reset-eqs)))
-        (when tuples
-          (setf events (append events tuples)))))
-    (mochi--mlist events)))
+Modelica models like SwitchedRC encode discontinuities as inline
+`if x > 0 then A else B' in their equations rather than as `when'
+clauses.  At simulation time CVODE needs an explicit zero-crossing
+detector to stop cleanly at the boundary; otherwise it tries to step
+adaptively across the discontinuity.  We synthesise detector-only
+events from these conditions.
 
-;; --- Build the Maxima struct -------------------------------------------
+Conditions that reference only parameters (e.g. MSL PID's
+`pid.D.zeroGain' = (Td < 1e-12)`) are skipped — those collapse to a
+constant at linearisation time via mod__resolve_cond_ifs, so they don't
+need a runtime detector."
+  (let ((conds '()))
+    (dolist (eq raw-eqs)
+      (mochi--walk-ast
+       (mochi--get eq :residual)
+       (lambda (node)
+         (when (eq (caar node) :*if)
+           (let ((branches (mochi--get (cdar node) :branches)))
+             (dolist (br branches)
+               (let* ((cond-ast (first br))
+                      (refs (mochi--ast-references cond-ast)))
+                 (when (some (lambda (s) (gethash s refs)) state-names)
+                   (push cond-ast conds)))))))))
+    (nreverse conds)))
 
-(defun mochi--build-init-bindings (raw-fx-init)
-  "Walk RAW-FX-INIT (the :fx--init list from rumoca) and return a hash
-table mapping the LHS variable name (string, with `.' between component
-parts) to its RHS AST node.  rumoca surfaces `final parameter T =
-max(Td/Nd, ...)' style binding equations here rather than as the
-parameter's `start' value, so mochi--start-value uses this table as a
-fallback when `start' is `Empty'."
-  (let ((h (make-hash-table :test 'equal)))
-    (dolist (entry raw-fx-init h)
-      (multiple-value-bind (tag body) (mochi--unwrap-tagged entry)
-        (when (eq tag :*simple)
-          (let* ((lhs-node (mochi--get body :lhs))
-                 (lhs-body (cdar lhs-node))
-                 (name (mochi--cref-name lhs-body))
-                 (rhs (mochi--get body :rhs)))
-            (setf (gethash name h) rhs)))))))
+(defun mochi--bare-if-event-tuples (cond-ast covered-pretties)
+  "Synthesise detector-only event tuples for a state-dependent boolean
+condition that appears inside an inline `if'.  Returns nil if the cond
+isn't comparison-shaped (mochi--cond-to-detectors errors out) or its
+pretty form already appears in COVERED-PRETTIES (so a when_clause event
+is already tracking the same boundary)."
+  (errcatch-mochi
+   (lambda ()
+     (let ((pretty (mochi--cond-pretty cond-ast)))
+       (unless (member pretty covered-pretties :test #'equal)
+         (let ((detectors   (mochi--cond-to-detectors cond-ast))
+               (empty-reset (mochi--mlist '())))
+           (mapcar (lambda (det)
+                     (mochi--mlist (list (first det)
+                                         empty-reset
+                                         t      ; guard = always true
+                                         pretty
+                                         (second det))))
+                   detectors)))))))
 
-(defun mochi--start-value (info init-bindings)
-  "INFO is a parameter or state info alist.  Return the start-value:
-a number when rumoca emitted a literal default, or a Maxima expression
-(in Lisp form) when the default is computed (e.g. MSL parameters
-declared as `Add.k1 = +1' or `D.T = max({Td/Nd, 100*1e-15})').
+(defun mochi--extract-events (raw-when-clauses extra-cond-asts)
+  "Build the events list for the model struct.  WHEN_CLAUSE-derived
+events (reset-bearing) come first; detector-only events synthesised
+from state-dependent inline `if' conditions in EXTRA-COND-ASTS come
+second, deduplicated against the when_clause set."
+  (let* ((wc-events (mapcan #'mochi--when-clause-to-events raw-when-clauses))
+         (covered (remove-duplicates
+                   (mapcar (lambda (ev) (fourth (cdr ev))) wc-events)
+                   :test #'equal))
+         (extra-events
+           (loop for c in extra-cond-asts
+                 nconc (or (mochi--bare-if-event-tuples c covered) '()))))
+    (mochi--mlist (append wc-events extra-events))))
 
-INIT-BINDINGS is the hash table from mochi--build-init-bindings: when
-`start' is `Empty' (rumoca's sentinel for `no literal default') but the
-variable has a binding equation in :fx--init, we fall back to that —
-this is how MSL's `final parameter T = max(...)' calculated parameters
-reach the params list.
+;; --- Variable classification (flat-json) -------------------------------
 
-Caller is responsible for resolving the expression — usually by
-substituting other parameter values into it iteratively until it
-reduces to a number."
-  (let ((start (mochi--get info :start)))
-    (cond
-      ((null start) 0)
-      ;; \"Empty\" (a JSON string, not a tagged enum) means no literal
-      ;; default; consult init-bindings before giving up to zero.
-      ((and (stringp start) (string= start "Empty"))
-       (let* ((name (mochi--name-from-info info))
-              (binding (gethash name init-bindings)))
-         (if binding (mochi--ast-to-maxima binding) 0)))
-      (t (mochi--ast-to-maxima start)))))
-
-(defun mochi--name-from-info (info)
-  "INFO is a parameter or state info alist with a :NAME field."
-  (mochi--get info :name))
-
-(defun mochi--params-list (raw init-bindings)
-  "RAW is the alist under :p from rumoca; INIT-BINDINGS comes from
-mochi--build-init-bindings."
-  (mochi--mlist
-   (mapcar (lambda (entry)
-             (let* ((info (cdr entry))
-                    (name (mochi--name-from-info info))
-                    (val (mochi--start-value info init-bindings)))
-               (mochi--mlist (list (mochi--mxsym name) val))))
-           raw)))
-
-(defun mochi--state-symbols (raw)
-  "RAW is the alist under :x from rumoca; return ((MLIST) $name1 $name2 ...)."
-  (mochi--mlist
-   (mapcar (lambda (entry)
-             (mochi--mxsym (mochi--name-from-info (cdr entry))))
-           raw)))
-
-(defun mochi--deriv-symbols (raw)
-  (mochi--mlist
-   (mapcar (lambda (entry)
-             (mochi--mxsym (concatenate 'string "der_"
-                                        (mochi--name-from-info (cdr entry)))))
-           raw)))
-
-(defun mochi--initial-list (raw init-bindings)
-  (mochi--mlist
-   (mapcar (lambda (entry)
-             (let* ((info (cdr entry))
-                    (name (mochi--name-from-info info))
-                    (val (mochi--start-value info init-bindings)))
-               (mochi--mlist (list (mochi--mxsym name) val))))
-           raw)))
-
-(defun mochi--io-list (names)
-  (mochi--mlist (mapcar #'mochi--mxsym names)))
-
-(defun mochi--residuals (raw)
-  "RAW is the list under :f--x from rumoca."
-  (mochi--mlist
-   (mapcar (lambda (eq-entry)
-             (mochi--ast-to-maxima (mochi--get eq-entry :residual)))
-           raw)))
-
-;; --- Public entry point ------------------------------------------------
-
-(defun mochi--causality-tag (info)
-  "Return the cl-json keyword for the causality tag of a variable info
-entry (e.g. :*INPUT, :*OUTPUT), or NIL if causality is `Empty'.  rumoca
-emits causality as either the JSON string \"Empty\" or a single-key
-object like {\"Output\": {...}}; cl-json decodes the latter to an alist
-((:*OUTPUT . inner)), which we inspect with caar."
-  (let ((c (cdr (assoc :causality info))))
-    (when (consp c) (caar c))))
-
-(defun mochi--info-symbol (info)
-  "Build the Maxima `$name' symbol for a variable info entry."
-  (mochi--mxsym (mochi--name-from-info info)))
+(defun mochi--var-tag (info field)
+  "Read a tagged-enum FIELD (e.g. :variability, :causality) from a
+variable info alist.  rumoca emits either the string \"Empty\" or a
+single-key alist like ((:*PARAMETER . inner))."
+  (let ((v (mochi--get info field)))
+    (when (consp v) (caar v))))
 
 (defun mochi--top-level-name-p (name)
   "True iff NAME has no `.' — heuristic for `top-level model variable'
@@ -935,27 +848,173 @@ scoped: `tank1.q_out' came from the inner Tank class, not the outer
 TwoTanks user interface."
   (not (find #\. name)))
 
-(defun mochi--partition-y-by-causality (raw-y)
-  "Split RAW-Y (the alist under :y from rumoca) into (values outputs
-algebraics), each a list of Maxima symbols.  An entry counts as an
-output only if its causality tag is `Output' AND its (pre-flatten) name
-is top-level (contains no `.'): rumoca preserves the `output' attribute
-through `extends' and component instances, but instance-internal
-outputs like `tank1.q_out' aren't part of the wrapping model's external
-interface — they're algebraic from the caller's perspective.  Anything
-not classified as an output is treated as algebraic."
-  (let ((outputs '())
-        (algebraics '()))
-    (dolist (entry raw-y)
-      (let* ((info (cdr entry))
-             (name (mochi--name-from-info info))
-             (sym (mochi--mxsym name)))
+(defun mochi--walk-ast (node fn)
+  "Recursively descend an AST NODE, calling FN on each tagged-enum
+sub-node encountered.  Bodies are alists `((:KEY . VALUE) ...)' — we
+recurse into each VALUE so nested AST nodes (themselves tagged-enum
+alists) get visited."
+  (when (and (consp node) (consp (car node)) (keywordp (caar node)))
+    (funcall fn node)
+    (let ((body (cdar node)))
+      (when (consp body)
+        (dolist (kv body)
+          (let ((v (cdr kv)))
+            (cond
+              ((and (consp v) (consp (car v)) (keywordp (caar v)))
+               (mochi--walk-ast v fn))
+              ((listp v)
+               (dolist (child v)
+                 (when (consp child) (mochi--walk-ast child fn)))))))))))
+
+(defun mochi--outer-or-connect-eq-p (eq)
+  "True iff EQ comes from the top-level model body or from a connect()
+synthesis.  rumoca tags each equation with :ORIGIN, one of:
+  ComponentEquation{component: \"\"}        — outer-body user equation
+  ComponentEquation{component: \"path.to\"}  — flattened inner-class
+  Connection                                  — synthesised connect equality
+  FlowSum                                     — sum-of-flow-vars = 0
+Only the first three count as 'outer constraints' for input binding —
+flattened inner equations are part of the inner class's interface and
+don't bind the outer model's free inputs."
+  (let ((origin (mochi--get eq :origin)))
+    (when (consp origin)
+      (let ((tag (caar origin)))
         (cond
-          ((and (eq (mochi--causality-tag info) :*output)
-                (mochi--top-level-name-p name))
-           (push sym outputs))
-          (t (push sym algebraics)))))
-    (values (nreverse outputs) (nreverse algebraics))))
+          ((eq tag :*connection) t)
+          ((eq tag :*flow-sum)   t)
+          ((eq tag :*component-equation)
+           (let* ((body (cdar origin))
+                  (component (mochi--get body :component)))
+             (and (stringp component) (string= component "")))))))))
+
+(defun mochi--ast-references (node)
+  "Walk an AST NODE and return a hash table of every VarRef name found."
+  (let ((names (make-hash-table :test 'equal)))
+    (mochi--walk-ast
+     node
+     (lambda (n)
+       (when (eq (caar n) :*var-ref)
+         (setf (gethash (mochi--varref-name (cdar n)) names) t))))
+    names))
+
+(defun mochi--bound-input-names (raw-eqs)
+  "Set (as a list) of variable names touched by any outer-body or
+connect-derived equation in RAW-EQS.  An Input-tagged variable in this
+set is bound by the outer model and is therefore algebraic from the
+caller's perspective, not a free input."
+  (let ((touched (make-hash-table :test 'equal)))
+    (dolist (eq raw-eqs)
+      (when (mochi--outer-or-connect-eq-p eq)
+        (let ((refs (mochi--ast-references (mochi--get eq :residual))))
+          (loop for k being the hash-keys of refs do
+                (setf (gethash k touched) t)))))
+    (loop for k being the hash-keys of touched collect k)))
+
+(defun mochi--collect-der-states (raw-eqs)
+  "Walk RAW-EQS (list of `((:RESIDUAL . AST) ...)' entries) and return
+the names of variables appearing inside `Der(...)' BuiltinCalls.
+Modelica defines states as continuous variables whose derivative is
+referenced — this is how mochi recovers the state list from flat-json,
+which (unlike v0.7.x's :x dict) doesn't enumerate them separately."
+  (let ((states (make-hash-table :test 'equal)))
+    (dolist (eq raw-eqs)
+      (mochi--walk-ast
+       (mochi--get eq :residual)
+       (lambda (node)
+         (let ((tag (caar node)) (body (cdar node)))
+           (when (and (eq tag :*builtin-call)
+                      (stringp (mochi--get body :function))
+                      (string= (mochi--get body :function) "Der"))
+             (let* ((arg (first (mochi--get body :args))))
+               (when (and (consp arg) (consp (car arg))
+                          (eq (caar arg) :*var-ref))
+                 (let ((name (mochi--varref-name (cdar arg))))
+                   (setf (gethash name states) t)))))))))
+    (loop for k being the hash-keys of states collect k)))
+
+(defun mochi--start-value (info)
+  "Return the variable's start-value as a Maxima expression (or number).
+Prefer :BINDING (the resolved declaration expression — literal or
+computed) over :START (rumoca's parsed-from-source default before
+flattening).  Returns 0 if both are absent or the JSON sentinel
+\"Empty\"."
+  (labels ((empty-p (v) (or (null v)
+                            (and (stringp v) (string= v "Empty")))))
+    (let ((binding (mochi--get info :binding))
+          (start   (mochi--get info :start)))
+      (cond
+        ((not (empty-p binding)) (mochi--ast-to-maxima binding))
+        ((not (empty-p start))   (mochi--ast-to-maxima start))
+        (t 0)))))
+
+(defun mochi--classify-variables (raw-variables state-names
+                                  top-level-inputs bound-names)
+  "Partition RAW-VARIABLES (the :VARIABLES alist) into a (param-info,
+state-name, input-name, output-name, algebraic-name) tuple list,
+returned via multiple values in that order.
+
+PARAM-INFO entries carry the full info alist (we need :binding /
+:start at construction time); the other four are flat lists of dotted
+name strings.
+
+Classification rules:
+  variability = Parameter or Constant       → param
+  name appears in STATE-NAMES               → state
+  name appears in TOP-LEVEL-INPUTS          → input (explicit top-level)
+  causality = Input and name NOT in
+            BOUND-NAMES                     → input (instance-promoted)
+  causality = Output and dot-free name      → output (top-level only)
+  otherwise                                 → algebraic
+
+Rationale: rumoca emits `top_level_input_components' for the model's
+explicit top-level `input' declarations, and propagates `causality.Input'
+into every flattened instance member.  An instance member is free
+(promoted to a model-level input) iff no outer-body or connect-derived
+equation touches it.  BOUND-NAMES is the touched-by-outer set; we
+exclude inputs that appear in it.  TOP-LEVEL-INPUTS always wins — an
+explicit declaration is free even if it's referenced on the RHS of an
+outer equation."
+  (let ((params nil)
+        (states nil)
+        (inputs nil)
+        (outputs nil)
+        (algebraics nil))
+    (dolist (entry raw-variables)
+      (let* ((info (cdr entry))
+             ;; cl-json mangles dotted dict keys (e.g. \"plant.y\" becomes
+             ;; :PLANT.Y, \"R\" becomes :+R+), so the alist key isn't a
+             ;; reliable name.  Pull the verbatim Modelica name from the
+             ;; info's :NAME string field instead.
+             (name (mochi--get info :name))
+             (vtag (mochi--var-tag info :variability))
+             (ctag (mochi--var-tag info :causality)))
+        (cond
+          ((or (eq vtag :*parameter) (eq vtag :*constant))
+           (push (cons name info) params))
+          ((member name state-names :test #'string=)
+           (push name states))
+          ((member name top-level-inputs :test #'string=)
+           (push name inputs))
+          ((and (eq ctag :*input)
+                (not (member name bound-names :test #'string=)))
+           (push name inputs))
+          ((and (eq ctag :*output) (mochi--top-level-name-p name))
+           (push name outputs))
+          (t
+           (push name algebraics)))))
+    (values (nreverse params) (nreverse states)
+            (nreverse inputs)  (nreverse outputs)
+            (nreverse algebraics))))
+
+(defun mochi--state-info-by-name (raw-variables name)
+  "Look up a variable's info alist by NAME (string).  Match against the
+info's :NAME field rather than the alist key, since cl-json mangles
+dotted / uppercase JSON keys."
+  (loop for entry in raw-variables
+        for info = (cdr entry)
+        when (string= (mochi--get info :name) name) return info))
+
+;; --- Walk Maxima expressions for symbol cleanup ------------------------
 
 (defun mochi--walk-syms (expr)
   "Walk a Maxima Lisp expression and return all `$'-prefixed user symbols."
@@ -967,12 +1026,23 @@ not classified as an output is treated as algebraic."
     ((consp expr) (mapcan #'mochi--walk-syms expr))
     (t nil)))
 
+(defparameter *mochi-implicit-globals*
+  '($time)
+  "Maxima symbols that may appear in residuals without being declared
+in :VARIABLES.  Modelica's `time' is the independent variable, supplied
+by the integrator — it isn't a state or algebraic.  mochi--unclassified-
+syms filters these out so mod__causalise doesn't try to solve for
+them.")
+
 (defun mochi--unclassified-syms (residual-exprs known-syms)
   "Return symbols appearing in RESIDUAL-EXPRS that aren't in KNOWN-SYMS.
-These are typically connector-flattened outputs (e.g. tank1_q_out) that
-rumoca didn't put in :y but which still need to be solved for."
-  (let ((all (remove-duplicates (mapcan #'mochi--walk-syms residual-exprs))))
-    (set-difference all known-syms)))
+Catches connector-flattened internal signals that didn't make it into
+the variable list, while excluding Modelica primitives like `time'."
+  (let* ((all (remove-duplicates (mapcan #'mochi--walk-syms residual-exprs)))
+         (unknown (set-difference all known-syms)))
+    (set-difference unknown *mochi-implicit-globals*)))
+
+;; --- Public entry point ------------------------------------------------
 
 (defun $mod_load (path &rest args)
   "Parse a Modelica .mo file and return a Maxima model struct.
@@ -989,47 +1059,65 @@ uses that as the explicit model name to compile."
                             (mochi--model-name-from-source mo-path)))
          (json-text (mochi--run-rumoca mo-path resolved-name))
          (model (cl-json:decode-json-from-string json-text))
-         (raw-params (cdr (assoc :p model)))
-         (raw-states (cdr (assoc :x model)))
-         (raw-inputs (cdr (assoc :u model)))
-         (raw-y      (cdr (assoc :y model)))
-         (raw-eqs     (cdr (assoc :fx model)))
-         (raw-fx-init (cdr (assoc :fx--init model)))
-         (raw-c       (cdr (assoc :c model)))
-         (raw-fc      (cdr (assoc :fc model)))
-         (raw-fr      (cdr (assoc :fr model)))
-         (init-bindings (mochi--build-init-bindings raw-fx-init))
-         ;; Each :fx entry is `((:*SIMPLE . ((:LHS . ...) (:RHS . ...))))'.
-         ;; The residual is `lhs - rhs' as a Maxima expression — the rest
-         ;; of mochi assumes `f(...) = 0' form.
-         (residual-exprs (mapcar #'mochi--simple-residual raw-eqs)))
-    (multiple-value-bind (output-syms alg-from-y)
-        (mochi--partition-y-by-causality raw-y)
+         (raw-variables    (cdr (assoc :variables model)))
+         (raw-eqs          (cdr (assoc :equations model)))
+         (raw-when-clauses (cdr (assoc :when--clauses model)))
+         (raw-top-inputs   (cdr (assoc :top--level--input--components model)))
+         (residual-exprs (mapcar (lambda (eq)
+                                   (mochi--ast-to-maxima
+                                    (mochi--get eq :residual)))
+                                 raw-eqs))
+         (state-names (mochi--collect-der-states raw-eqs))
+         (bound-names (mochi--bound-input-names raw-eqs))
+         (extra-cond-asts (mochi--collect-state-dependent-conds
+                           raw-eqs state-names)))
+    (multiple-value-bind (params state-syms-str input-syms-str
+                          output-syms-str alg-syms-str)
+        (mochi--classify-variables raw-variables state-names
+                                   raw-top-inputs bound-names)
       (let* ((name resolved-name)
-             (param-syms (mapcar (lambda (e) (mochi--info-symbol (cdr e)))
-                                 raw-params))
-             (state-syms (mapcar (lambda (e) (mochi--info-symbol (cdr e)))
-                                 raw-states))
-             (deriv-syms (mapcar (lambda (e) (mochi--mxsym (concatenate 'string "der_"
-                                                                       (mochi--name-from-info (cdr e)))))
-                                 raw-states))
-             (input-syms (mapcar (lambda (e) (mochi--info-symbol (cdr e)))
-                                 raw-inputs))
-             (known-syms  (append param-syms state-syms deriv-syms
-                                  input-syms output-syms alg-from-y))
-             ;; Catch any algebraic symbol that appears in residuals but
-             ;; isn't in :y (e.g. a connector-flattened internal signal
-             ;; that didn't make it into the variable list).
-             (alg-extra   (mochi--unclassified-syms residual-exprs known-syms))
-             (algebraics  (append alg-from-y alg-extra)))
+             (params-mlist
+               (mochi--mlist
+                (mapcar (lambda (entry)
+                          (mochi--mlist
+                           (list (mochi--mxsym (car entry))
+                                 (mochi--start-value (cdr entry)))))
+                        params)))
+             (state-syms (mapcar #'mochi--mxsym state-syms-str))
+             (deriv-syms (mapcar (lambda (n)
+                                   (mochi--mxsym
+                                    (concatenate 'string "der_" n)))
+                                 state-syms-str))
+             (input-syms  (mapcar #'mochi--mxsym input-syms-str))
+             (output-syms (mapcar #'mochi--mxsym output-syms-str))
+             (alg-from-vars (mapcar #'mochi--mxsym alg-syms-str))
+             (known-syms (append (mapcar (lambda (e) (mochi--mxsym (car e))) params)
+                                 state-syms deriv-syms
+                                 input-syms output-syms alg-from-vars))
+             ;; Catch connector-flattened algebraics that aren't in :variables.
+             (alg-extra (mochi--unclassified-syms residual-exprs known-syms))
+             (algebraics (append alg-from-vars alg-extra))
+             (initial-mlist
+               (mochi--mlist
+                (mapcar (lambda (sname)
+                          (let ((info (mochi--state-info-by-name
+                                       raw-variables sname)))
+                            (mochi--mlist
+                             (list (mochi--mxsym sname)
+                                   (if info
+                                       (mochi--start-value info)
+                                       0)))))
+                        state-syms-str))))
         (mochi--mlist
          (list (mochi--mequal '$name name)
-               (mochi--mequal '$params (mochi--params-list raw-params init-bindings))
+               (mochi--mequal '$params params-mlist)
                (mochi--mequal '$states (mochi--mlist state-syms))
                (mochi--mequal '$derivs (mochi--mlist deriv-syms))
                (mochi--mequal '$algebraics (mochi--mlist algebraics))
                (mochi--mequal '$inputs (mochi--mlist input-syms))
                (mochi--mequal '$outputs (mochi--mlist output-syms))
-               (mochi--mequal '$initial (mochi--initial-list raw-states init-bindings))
+               (mochi--mequal '$initial initial-mlist)
                (mochi--mequal '$residuals (mochi--mlist residual-exprs))
-               (mochi--mequal '$events (mochi--extract-events raw-c raw-fc raw-fr))))))))
+               (mochi--mequal '$events (mochi--extract-events
+                                        raw-when-clauses
+                                        extra-cond-asts))))))))

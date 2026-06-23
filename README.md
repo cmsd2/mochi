@@ -76,7 +76,9 @@ rumoca reshapes its CLI and JSON schema almost every minor release. Rather than 
 
 | mochi tag      | rumoca version | notes                                                                                                                          |
 | -------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| 0.1.x          | **v0.7.28**    | Flat CLI (`rumoca --json --model NAME -L PATH FILE`). Initial release that switched to rumoca's JSON DAE output. |
+| 0.2.x (master) | **v0.9.8**     | `rumoca compile --emit flat-json --model NAME --source-root PATH FILE`. Single `variables` dict with per-entry causality / variability tags; `when_clauses` for events; mochi synthesises detectors for state-dependent inline `if`-in-equation switches (since rumoca doesn't surface them as event metadata). |
+| 0.1.x          | v0.7.28        | Flat CLI (`rumoca --json --model NAME -L PATH FILE`). Initial release that switched to rumoca's JSON DAE output. |
+| (skipped)      | v0.8.x         | rumoca dropped causality, inputs (`:u`), and event metadata from `compile --json` in v0.8.x — only `:f_x` + `:p` + `:x` survive, and no richer emit mode restores them. Not actionable for mochi; skip to v0.9.x. |
 
 ### Testing across rumoca versions
 

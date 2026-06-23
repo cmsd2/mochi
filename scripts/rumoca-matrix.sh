@@ -80,7 +80,12 @@ run_tests() {
   RUMOCA_BIN="$bin" mxpm test -y 2>&1 || true
 }
 
-summary_pattern='(rtest_mochi[a-z_]*\.mac: [0-9]+/[0-9]+|^Tests (passed|failed):)'
+# mxpm test emits one of:
+#   "Tests failed: N/M passed, K failed."       (one or more failures)
+#   "All tests passed."                          (clean run)
+# We want either as the per-version summary; grep tolerates absence so
+# a load-time crash before the summary still surfaces in the matrix.
+summary_pattern='(rtest_mochi[a-z_]*\.mac: [0-9]+/[0-9]+|^Tests (passed|failed):|^All tests passed\.)'
 
 declare -a summary_rows
 for tag in "${versions[@]}"; do
@@ -97,8 +102,9 @@ for tag in "${versions[@]}"; do
   # Stream the per-file pass/fail lines so the user sees progress.
   echo "$out" | grep -E "$summary_pattern" || true
 
-  # Final aggregate line — what we put in the matrix.
-  total_line=$(echo "$out" | grep -E '^Tests (passed|failed):' | tail -1)
+  # Final aggregate line — what we put in the matrix.  Wrap in a
+  # subshell so a non-matching grep doesn't abort under `set -e`.
+  total_line=$( (echo "$out" | grep -E '^(Tests (passed|failed):|All tests passed\.)' | tail -1) || true )
   summary_rows+=("$tag|${total_line:-(no summary emitted — likely a load error; see full output above)}")
 done
 
