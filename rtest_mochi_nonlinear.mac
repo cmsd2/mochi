@@ -139,7 +139,7 @@ true;
 
 /* ---- Auto-extracted events from `when` clauses ----
    rumoca surfaces `when h <= 0 and v < 0 then reinit(v, -e * pre(v))'
-   in its f_z block; mochi-loader walks that and stores it in the
+   in its when_chains; mochi-loader walks that and stores it in the
    model's `events' field.  mod_simulate_nonlinear defaults to that
    list, so the user doesn't have to re-specify what's already in the
    .mo file.  Events: one tuple per primitive comparison (here `h <= 0'
@@ -213,6 +213,22 @@ true;
 
 is(lmin(map(first, x_ovr)) > 0.4);
 true;
+
+/* ---- `elsewhen' branches ----
+   rumoca emits a `when'/`elsewhen' equation as one when_chains entry.
+   Each branch becomes its own event, first branch first. */
+(m_staged : mod_load("examples/StagedReset.mo"), true);
+true;
+
+length(mod_get(m_staged, 'events));
+2;
+
+[mod_get(m_staged, 'events)[1][2], mod_get(m_staged, 'events)[2][2]];
+[[y = 1], [y = 2]];
+
+/* Rising crossings of x - 1 and x - 2. */
+[mod_get(m_staged, 'events)[1][5], mod_get(m_staged, 'events)[2][5]];
+[1, 1];
 
 /* Continuous-only models have no events. */
 (m_rlc_ev : mod_load("examples/RLCircuit.mo"), true);

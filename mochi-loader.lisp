@@ -310,7 +310,7 @@ display matches NAME with dots translated to underscores."
 ;;   If            body: ((:BRANCHES . ((cond1 val1) ...)) (:ELSE--BRANCH . ...))
 ;;   Array         body: ((:ELEMENTS . (...)) (:SPAN . ...))
 ;;   Reinit        body: ((:STATE . "name") (:VALUE . ...))
-;;                 — only seen inside when_clauses[*].equations; handled by
+;;                 — only seen in the equations of a when_chains branch; handled by
 ;;                   the event extractor, not by mochi--ast-to-maxima.
 ;;
 ;; Notable v0.9.x changes vs v0.7.x: `:op' is a plain string (no
@@ -741,13 +741,13 @@ state at event time equals the value CVODE returns)."
 
 (defun errcatch-mochi (thunk)
   "Run THUNK, returning its result on success or NIL on any error.
-Used to skip when_clauses whose condition isn't shaped like a real-
+Used to skip `when' branches whose condition isn't shaped like a real-
 valued boundary detector (e.g. a bare Boolean discrete-mode flag)."
   (handler-case (funcall thunk)
     (error () nil)))
 
 (defun mochi--when-clause-to-events (wc)
-  "Convert one :WHEN--CLAUSES entry to a list of event tuples
+  "Convert one `when' branch (see mochi--when-branches) to a list of event tuples
 `(detector reset-eqs guard cond-pretty direction)' — one per primitive
 comparison in the condition.  All tuples share the same reset and guard
 but each carries its own direction."
@@ -802,7 +802,7 @@ need a runtime detector."
   "Synthesise detector-only event tuples for a state-dependent boolean
 condition that appears inside an inline `if'.  Returns nil if the cond
 isn't comparison-shaped (mochi--cond-to-detectors errors out) or its
-pretty form already appears in COVERED-PRETTIES (so a when_clause event
+pretty form already appears in COVERED-PRETTIES (so a `when' branch event
 is already tracking the same boundary)."
   (errcatch-mochi
    (lambda ()
@@ -818,12 +818,23 @@ is already tracking the same boundary)."
                                          (second det))))
                    detectors)))))))
 
-(defun mochi--extract-events (raw-when-clauses extra-cond-asts)
-  "Build the events list for the model struct.  WHEN_CLAUSE-derived
-events (reset-bearing) come first; detector-only events synthesised
+(defun mochi--when-branches (raw-when-chains)
+  "Flatten rumoca's when_chains into their branches in source order:
+each chain's `first' branch, then its `else_when' branches.  A branch
+has the :CONDITION and :EQUATIONS fields that rumoca v0.9.x emitted as
+one when_clauses entry.  Every branch becomes an independent event, as
+v0.9.x's separate entries did, so an `elsewhen' branch does not yield
+to an earlier branch of its chain that fires at the same instant."
+  (loop for chain in raw-when-chains
+        collect (mochi--get chain :first)
+        append (copy-list (mochi--get chain :else--when))))
+
+(defun mochi--extract-events (raw-when-branches extra-cond-asts)
+  "Build the events list for the model struct.  Events from `when'
+branches (reset-bearing) come first; detector-only events synthesised
 from state-dependent inline `if' conditions in EXTRA-COND-ASTS come
-second, deduplicated against the when_clause set."
-  (let* ((wc-events (mapcan #'mochi--when-clause-to-events raw-when-clauses))
+second, deduplicated against the `when' branch set."
+  (let* ((wc-events (mapcan #'mochi--when-clause-to-events raw-when-branches))
          (covered (remove-duplicates
                    (mapcar (lambda (ev) (fourth (cdr ev))) wc-events)
                    :test #'equal))
@@ -1061,7 +1072,8 @@ uses that as the explicit model name to compile."
          (model (cl-json:decode-json-from-string json-text))
          (raw-variables    (cdr (assoc :variables model)))
          (raw-eqs          (cdr (assoc :equations model)))
-         (raw-when-clauses (cdr (assoc :when--clauses model)))
+         (raw-when-branches (mochi--when-branches
+                             (cdr (assoc :when--chains model))))
          (raw-top-inputs   (cdr (assoc :top--level--input--components model)))
          (residual-exprs (mapcar (lambda (eq)
                                    (mochi--ast-to-maxima
@@ -1119,5 +1131,5 @@ uses that as the explicit model name to compile."
                (mochi--mequal '$initial initial-mlist)
                (mochi--mequal '$residuals (mochi--mlist residual-exprs))
                (mochi--mequal '$events (mochi--extract-events
-                                        raw-when-clauses
+                                        raw-when-branches
                                         extra-cond-asts))))))))

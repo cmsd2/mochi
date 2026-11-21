@@ -31,7 +31,7 @@ rumoca_cache="${RUMOCA_CACHE:-$mochi_dir/.rumoca-cache}"
 if [ "$#" -gt 0 ]; then
   versions=("$@")
 else
-  versions=(v0.7.28 v0.8.12 v0.9.8)
+  versions=(v0.7.28 v0.8.12 v0.9.8 v0.10.4)
 fi
 
 if [ ! -d "$rumoca_src/.git" ]; then
