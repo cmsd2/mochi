@@ -1,4 +1,4 @@
-This is mochi.info, produced by makeinfo version 7.1 from mochi.texi.
+This is mochi.info, produced by makeinfo version 7.2 from mochi.texi.
 
 
 File: mochi.info,  Node: Top,  Next: Package mochi,  Up: (dir)
@@ -610,76 +610,42 @@ Appendix A Function and variable index
 * mod_unity_feedback:                    Function mod_unity_feedback SS K.
                                                                 (line 3)
 
-
 
 Tag Table:
 Node: Top71
 Node: Package mochi174
-Ref: #package-mochi307
 Node: Introduction to mochi458
-Ref: #introduction-to-mochi611
 Node: Definitions for mochi1085
-Ref: #definitions-for-mochi1272
 Node: Function mod_load path2253
-Ref: #function-mod_load-path2391
 Node: Function mod_print m3210
-Ref: #function-mod_print-m3390
 Node: Function mod_state_space m op_point3425
-Ref: #function-mod_state_space-m-op_point3650
 Node: Function mod_state_space m op_point override_params3651
-Ref: #function-mod_state_space-m-op_point-override_params3917
 Node: Function mod_state_space_symbolic m op_point5099
-Ref: #function-mod_state_space_symbolic-m-op_point5372
 Node: Function mod_simulate m op_point u_fn t_end [opts]5717
-Ref: #function-mod_simulate-m-op_point-u_fn-t_end-opts5989
 Node: Function mod_step m op_point t_end [opts]6514
-Ref: #function-mod_step-m-op_point-t_end-opts6776
 Node: Function mod_impulse m op_point t_end [opts]6777
-Ref: #function-mod_impulse-m-op_point-t_end-opts7023
 Node: Function mod_lqr m op_point Q R7557
-Ref: #function-mod_lqr-m-op_point-q-r7796
 Node: Function mod_lqr m op_point Q R override_params7797
-Ref: #function-mod_lqr-m-op_point-q-r-override_params8037
 Node: Function mod_cascade SS1 SS29385
-Ref: #function-mod_cascade-ss1-ss29601
 Node: Function mod_parallel SS1 SS29602
-Ref: #function-mod_parallel-ss1-ss29804
 Node: Function mod_unity_feedback SS K9805
-Ref: #function-mod_unity_feedback-ss-k10023
 Node: Function mod_transfer_function m op_point10664
-Ref: #function-mod_transfer_function-m-op_point10919
 Node: Function mod_transfer_function m op_point override_params10920
-Ref: #function-mod_transfer_function-m-op_point-override_params11182
 Node: Function mod_get m key11504
-Ref: #function-mod_get-m-key11714
 Node: Function mod__causalise m11784
-Ref: #function-mod__causalise-m11978
 Node: Function mod_dataflow m op_point [opts]12933
-Ref: #function-mod_dataflow-m-op_point-opts13151
 Node: Function mod_to_dot m op_point14112
-Ref: #function-mod_to_dot-m-op_point14341
 Node: Function mod_to_dot m op_point override_params14342
-Ref: #function-mod_to_dot-m-op_point-override_params14583
 Node: Function mod_to_mermaid m op_point14584
-Ref: #function-mod_to_mermaid-m-op_point14832
 Node: Function mod_to_mermaid m op_point override_params14833
-Ref: #function-mod_to_mermaid-m-op_point-override_params15090
 Node: Function mod_diagram m op_point [opts]15283
-Ref: #function-mod_diagram-m-op_point-opts15485
 Node: Subsystem mochi-nonlinear16801
-Ref: #subsystem-mochi-nonlinear16984
 Node: Function mod_simulate_nonlinear m x0 u_fn t_end [opts]17645
-Ref: #function-mod_simulate_nonlinear-m-x0-u_fn-t_end-opts17880
 Node: Discrete events19237
-Ref: #discrete-events19358
 Node: Function mod_step_nonlinear m x0 t_end [opts]22185
-Ref: #function-mod_step_nonlinear-m-x0-t_end-opts22467
 Node: Function mod_impulse_nonlinear m x0 t_end [opts]22468
-Ref: #function-mod_impulse_nonlinear-m-x0-t_end-opts22690
 Node: Example22875
-Ref: #example23041
 Node: Note mod_load does not touch session state23923
-Ref: #note-mod_load-does-not-touch-session-state24135
 Node: Function and variable index24591
 
 End Tag Table
