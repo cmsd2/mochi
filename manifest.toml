@@ -1,6 +1,6 @@
 [package]
 name = "mochi"
-version = "0.3.1"
+version = "0.3.2"
 description = "Read Modelica models into Maxima symbolic equations via rumoca"
 license = "MIT"
 entry = "mochi.mac"
