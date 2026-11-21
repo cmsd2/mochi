@@ -230,6 +230,33 @@ length(mod_get(m_staged, 'events));
 [mod_get(m_staged, 'events)[1][5], mod_get(m_staged, 'events)[2][5]];
 [1, 1];
 
+/* Both branches fire in a simulation.  The guard of a strict `x > 1'
+   is 0 at the crossing itself, so it is evaluated just after it; before
+   that fix neither reset fired and y stayed 0.  Samples are 0.1 apart,
+   so t = 1.0, 1.5 and 2.0 are x_st[11], x_st[16] and x_st[21]. */
+([t_st, x_st] : mod_simulate_nonlinear(m_staged, [0.0, 0.0],
+                                        lambda([t], []), 3.0,
+                                        ['return = 'states, 'dt = 0.1]),
+ true);
+true;
+
+[x_st[11], x_st[16], x_st[21], last(x_st)];
+[[1.0, 1.0], [1.5, 1.0], [2.0, 2.0], [3.0, 2.0]];
+
+/* An explicit 2-element event has no guard and no direction.  Its root
+   lands on the sample at t = 1.0; that used to hang numerics-sundials,
+   and an Euler nudge after the reset used to leave x 1e-4 ahead of the
+   clock from then on.  The event fires once and x stays on the clock. */
+([t_ex, x_ex] : mod_simulate_nonlinear(m_staged, [0.0, 0.0],
+                                        lambda([t], []), 2.0,
+                                        ['return = 'states, 'dt = 0.5,
+                                         'events = [[x - 1, [y = y + 5]]]]),
+ true);
+true;
+
+x_ex;
+[[0.0, 0.0], [0.5, 0.0], [1.0, 5.0], [1.5, 5.0], [2.0, 5.0]];
+
 /* Continuous-only models have no events. */
 (m_rlc_ev : mod_load("examples/RLCircuit.mo"), true);
 true;

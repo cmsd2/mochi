@@ -101,8 +101,10 @@ mod__apply_reset(reset_rule, y_ev, t_ev, states, [extra_subst]) := block(
  *   - RESET_EQS is a list of state-update equations like
  *     `[v = -e*v, h = 0]' applied at the event time.  Variables not
  *     mentioned keep their current value.
- *   - GUARD (optional) is a Maxima expression evaluated at the event
- *     time; the reset is applied only if `guard > 0'.  Used to
+ *   - GUARD (optional) is a Maxima expression evaluated just after the
+ *     event (one Euler step of guard_dt along the dynamics, since at
+ *     the crossing itself the detector that fired is 0); the reset is
+ *     applied only if `guard > 0'.  Used to
  *     translate compound `when' conditions like `h <= 0 and v < 0'
  *     faithfully (without it we'd silently drop the second conjunct).
  *   - COND_PRETTY (auto-extracted only) is the original boolean for
@@ -125,10 +127,11 @@ mod__apply_reset(reset_rule, y_ev, t_ev, states, [extra_subst]) := block(
  * Mod_simulate_nonlinear integrates segment-by-segment between
  * requested times, restarting CVODE from the post-reset state each
  * time an event fires AND its guard accepts.  Events whose guard
- * evaluates to <= 0 (the boolean condition isn't actually true) are
- * treated as spurious and skipped.  CVODE's per-event `rootdir' filter
- * (set from each event's DIRECTION field) suppresses re-detection of
- * the same crossing immediately after the reset.
+ * evaluates to <= 0 just after the crossing (the boolean condition
+ * isn't actually true) are treated as spurious and skipped.  CVODE's
+ * per-event `rootdir' filter (set from each event's DIRECTION field)
+ * suppresses re-detection of the same crossing immediately after the
+ * reset; a direction-0 event gets the same filter for a short window.
  */
 mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   [opts1, dt, params, method, rtol, atol, return_what, events_in,
@@ -139,7 +142,7 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
    u_exprs, input_subst, rhs_exprs, vars_list,
    x0_vec, n, ni, no, nt, t_list,
    traj, k, x_k, u_k, x_sub, u_sub, full_sub, x_traj, y_traj, i,
-   nudge_dt : 1.0e-4],
+   guard_dt : 1.0e-7, mask_dt : 1.0e-4],
   if length(opts) >= 1 then opts1 : opts[1] else opts1 : [],
   dt          : mod__opts_get(opts1, 'dt,     t_end / 500),
   params      : mod__opts_get(opts1, 'params, []),
@@ -223,35 +226,49 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
   ) else (
     /* Event loop.  For each segment [t_list[k-1], t_list[k]]:
          repeatedly call np_cvode watching for zero crossings of any
-         event_expr.  CVODE's per-event `rootdir' filter (passed as the
-         10th arg) restricts detection to the matching crossing direction,
-         so the post-reset state — which sits exactly on the event
-         surface — doesn't immediately re-fire the same root.  When an
-         event fires:
-           1. Evaluate the user-supplied guard at the event time.  If
+         event_expr, with CVODE's per-event `rootdir' filter (the 10th
+         arg) restricting each event to its crossing direction.  When
+         an event fires:
+           1. Evaluate the guard just after the event time.  If
               guard <= 0 (the original Modelica boolean isn't actually
-              true at this point — typical for compound `and'/`or'
-              conditions where one detector fires but the other is
-              false), advance past the event without applying the reset.
+              true there — typical for compound `and'/`or' conditions
+              where one detector fires but the other is false), resume
+              from the event without applying the reset.
            2. Otherwise apply the reset and restart CVODE from the
-              post-reset state at exactly the event time — no time
-              nudge needed, because rootdir filtering prevents the
-              re-trigger that the nudge used to defeat.
-         `iter < max_iters' is a Zeno safety net. */
-    block([current_state : x0_vec, k, max_iters],
+              post-reset state at exactly the event time.
+         A reset can send the state straight back across the event
+         surface (a bounce).  With a direction set, rootdir ignores that
+         opposite crossing.  A direction-0 event (a 2- or 3-element user
+         event) gets the same protection for mask_dt after it fires:
+         CVODE watches it only in the direction it just crossed.  The
+         window is integrated like any other segment, so the state and
+         the clock stay together, and a sample time inside the window
+         is recorded as usual.  `iter < max_iters' is a Zeno safety
+         net. */
+    block([current_state : x0_vec, k, max_iters,
+           mask_idx : 0, mask_dir : 0, mask_until : 0.0],
       x_traj : [x0_vec],
       for k : 2 thru nt do block(
         [next_t : t_list[k], current_t : t_list[k - 1],
-         iter : 0, sub_tspan, result, traj_seg, evs, ev,
+         iter : 0, seg_end, dirs_now, result, traj_seg, evs, ev,
          t_ev, y_ev, ev_idx, nrows, guard_val, guard_subst,
-         post_state, der_now, state_subst, j],
+         post_state, j],
         max_iters : 100,
         while current_t < next_t and iter < max_iters do (
           iter : iter + 1,
-          sub_tspan : [current_t, next_t],
+          if mask_idx > 0 and current_t < mask_until then (
+            seg_end  : min(next_t, mask_until),
+            dirs_now : makelist(if j = mask_idx then mask_dir
+                                else event_dirs[j],
+                                j, 1, length(event_dirs))
+          ) else (
+            mask_idx : 0,
+            seg_end  : next_t,
+            dirs_now : event_dirs
+          ),
           result : np_cvode(rhs_exprs, vars_list, current_state,
-                             sub_tspan, rtol, atol, method,
-                             event_exprs, 5000, event_dirs),
+                             [current_t, seg_end], rtol, atol, method,
+                             event_exprs, 5000, dirs_now),
           traj_seg : first(result),
           evs : second(result),
           if length(evs) = 0 then (
@@ -259,60 +276,53 @@ mod_simulate_nonlinear(m, x0, u_fn, t_end, [opts]) := block(
             nrows : first(np_shape(traj_seg)),
             current_state : makelist(np_ref(traj_seg, nrows - 1, i),
                                      i, 1, n),
-            current_t : next_t
+            current_t : seg_end
           ) else (
             ev : first(evs),
             t_ev : ev[1],
             y_ev : ev[2],
             ev_idx : first(ev[3]),
-            /* Evaluate the guard at the event-time state.  If the
-               guard is `true', it short-circuits to 1 — the event
-               always fires.  Otherwise compute its numeric value and
-               only fire if positive. */
-            guard_subst : append([t = t_ev],
-                                 makelist(states[j] = y_ev[j],
-                                          j, 1, n)),
+            /* Evaluate the guard just after the crossing, one Euler
+               step of guard_dt along the dynamics from the event
+               state.  At the crossing itself the detector that fired
+               is 0, so a guard such as `x - 1' for `when x > 1', or
+               `min(-h, -v)' at h = 0, came out as 0 or a rounding
+               error either side and the event was skipped at random.
+               A guard of `true' short-circuits to 1: the event always
+               fires.  Otherwise fire only if the guard is positive. */
             guard_val   : if event_guards[ev_idx + 1] = true then 1.0
-                          else float(subst(guard_subst,
-                                           event_guards[ev_idx + 1])),
+                          else block([d_ev],
+                            guard_subst : append([t = t_ev],
+                                                 makelist(states[j] = y_ev[j],
+                                                          j, 1, n)),
+                            d_ev : map(lambda([e], float(subst(guard_subst, e))),
+                                       rhs_exprs),
+                            guard_subst : append([t = t_ev + guard_dt],
+                                                 makelist(states[j] = y_ev[j]
+                                                            + guard_dt * d_ev[j],
+                                                          j, 1, n)),
+                            float(subst(guard_subst,
+                                        event_guards[ev_idx + 1]))),
             if guard_val > 0 then (
               post_state : mod__apply_reset(reset_rules[ev_idx + 1],
                                              y_ev, t_ev, states,
                                              param_subst),
-              /* When direction is set (rootdir filter active), CVODE
-                 ignores the same-direction crossing that the post-
-                 reset state sits on, so we resume exactly at t_ev with
-                 the post-reset state.  When direction is 0 (legacy
-                 2-/3-element user events with no direction info), the
-                 reset state is exactly on the event surface and CVODE
-                 would re-fire immediately — take a tiny Euler half-
-                 step to push the state cleanly off the boundary. */
-              if event_dirs[ev_idx + 1] = 0 then (
-                state_subst : append([t = t_ev + nudge_dt],
-                                     makelist(states[j] = post_state[j],
-                                              j, 1, n)),
-                der_now : map(lambda([e], float(subst(state_subst, e))),
-                              rhs_exprs),
-                current_state : makelist(post_state[j]
-                                          + nudge_dt * der_now[j],
-                                         j, 1, n),
-                current_t     : t_ev + nudge_dt
-              ) else (
-                current_state : post_state,
-                current_t     : t_ev
-              )
+              current_state : post_state
             ) else (
               /* Guard rejected (e.g. compound `and' where this
                  detector fired but the other side is false).  Keep
-                 the event-time state and resume.  rootdir keeps
-                 CVODE from re-detecting the same crossing unless it's
-                 a real second one; for direction=0 events we still
-                 nudge past the boundary as before. */
-              current_state : y_ev,
-              current_t     : if event_dirs[ev_idx + 1] = 0
-                                then t_ev + nudge_dt
-                                else t_ev
-            )
+                 the event-time state. */
+              current_state : y_ev
+            ),
+            /* Resume exactly at t_ev.  (An earlier Euler nudge for
+               direction-0 events moved the time past t_ev but kept
+               the sample bookkeeping, so the state ran 1e-4 ahead of
+               the clock from then on.) */
+            current_t : t_ev,
+            if event_dirs[ev_idx + 1] = 0 then (
+              mask_idx   : ev_idx + 1,
+              mask_dir   : first(ev[4]),
+              mask_until : t_ev + mask_dt)
           )),
         if iter >= max_iters then
           error("mod_simulate_nonlinear: too many events near t = ",

@@ -2,9 +2,7 @@ model StagedReset
   // A `when' chain with an `elsewhen' branch.  The clock x rises at unit
   // rate; y is set to 1 when x passes 1 and to 2 when it passes 2.  The
   // two crossings never coincide, so branch priority doesn't matter here.
-  // rtest_mochi_nonlinear checks the extracted events only: a guard such
-  // as x - 1 is exactly 0 at the crossing CVODE finds, and
-  // mod_simulate_nonlinear skips events whose guard isn't positive.
+  // Both crossings land on sample times when simulated with dt = 0.1.
   Real x(start = 0);   // clock
   Real y(start = 0);   // stage
 equation
