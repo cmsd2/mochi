@@ -7,6 +7,11 @@
 (load("mochi"), true);
 true;
 
+/* Loading mochi registers its help index, so ? finds its functions.
+   describe returns true only when it finds the topic. */
+describe("mod_load", exact);
+true;
+
 /* Load the RLC example and verify the basic structure */
 (m_rlc : mod_load("examples/RLCircuit.mo"), true);
 true;

@@ -26,6 +26,15 @@
 
 (funcall (intern "QUICKLOAD" :ql) :cl-json :silent t)
 
+;; --- Help index for ? and ?? --------------------------------------------
+;; mochi-index.lisp (built by `mxpm doc build') maps topics to byte offsets
+;; in mochi.info, both beside this file.
+
+(let* ((here (make-pathname :directory (pathname-directory *load-truename*)))
+       (idx (merge-pathnames "mochi-index.lisp" here)))
+  (when (probe-file idx)
+    ($load (namestring idx))))
+
 ;; --- Locating rumoca ----------------------------------------------------
 
 (defun mochi--rumoca-bin ()
